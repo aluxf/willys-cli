@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/aluxf/willys-cli/main/install.sh | 
 The installer downloads a standalone binary and verifies its SHA-256 checksum.
 You do not need Python, Go, or a package manager.
 It installs into `~/.local/bin`. Follow the printed PATH instruction if needed.
-The installer defaults to the reviewed beta, `v0.2.0-beta.2`.
+The installer defaults to the reviewed beta, `v0.2.0-beta.3`.
 Set `WILLYS_INSTALL_DIR` to choose another directory, or `WILLYS_VERSION` to select a release.
 Run the installer again to update.
 
@@ -34,13 +34,15 @@ Releases support macOS, Linux, and Windows on AMD64 and ARM64.
 ```sh
 willys search "penne"
 willys search "penne, Pepsi Max, Heinz ketchup, ramen" --limit 3
-willys product 101240218_ST
 willys set 101240218_ST 10
 willys cart
 willys cart --details
 willys remove 101240218_ST
 willys cart reset
 ```
+
+Search returns brand, pack size, price, and product code. Verify the match, then use `set` directly.
+`willys product CODE` is optional. Use it only when more information is needed.
 
 `set` sets the final quantity. It does not add that quantity to the previous amount.
 Use `--unit kilogram` for supported weight-based products. Weight-based updates remain unverified live.

@@ -56,7 +56,6 @@ Checkout flags:
 Example workflow:
   willys cart
   willys search "penne, Pepsi Max" --limit 3
-  willys product CODE
   willys set CODE 2
   willys setup
   willys slots
@@ -65,7 +64,8 @@ Example workflow:
   willys checkout
 
 Usage notes:
-  Verify brand, pack size, quantity, and price before adding products.
+  Search returns brand, pack size, price, and code. Verify the match, then use set directly.
+  product CODE is optional; use it only when more information is needed.
   Swedish catalog terms work best. --details adds images, ingredients, and nutrition to products.
   Use the same profile throughout an order. Default terminals share the same saved cart.
   Different-product updates can run together. Conflicting commands wait automatically.

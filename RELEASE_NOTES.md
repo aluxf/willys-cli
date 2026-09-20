@@ -1,8 +1,10 @@
-One global help page now ships inside the CLI.
+The global help now makes the direct shopping flow explicit:
 
-Run willys or willys --help for commands, options, a shopping example, and payment safeguards.
-Command-level --help flags show the same guide.
-AGENTS.md now contains short development guidelines only.
+1. Search for products.
+2. Verify brand, pack size, price, and code in the search results.
+3. Set the requested quantity directly.
 
-This beta retains the safety fixes from v0.2.0-beta.1.
+The product command is optional when more information is needed.
+The README example follows the same flow.
+
 Payment completion and reconciliation remain unverified. Klarna requires the experimental flag.

@@ -16,7 +16,7 @@ case "$(uname -m)" in
   x86_64|amd64) arch=amd64 ;;
   *) fail 'This processor architecture is not supported.' ;;
 esac
-version=${WILLYS_VERSION:-v0.2.0-beta.2}
+version=${WILLYS_VERSION:-v0.2.0-beta.3}
 case "$version" in ''|*[!A-Za-z0-9._-]*) fail 'Invalid WILLYS_VERSION.' ;; esac
 repo=https://github.com/aluxf/willys-cli
 if [ "$version" = latest ]; then
