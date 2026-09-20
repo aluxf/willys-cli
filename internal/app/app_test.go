@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -265,9 +266,13 @@ func TestHTTPFailureKeepsSession(t *testing.T) {
 }
 
 type checkoutFixture struct {
+	mu                               sync.Mutex
 	cartReads, placeCalls, modeCalls int
 	changed, timeout, conflict       bool
 	token                            string
+	timeoutStarted                   chan struct{}
+	timeoutRelease                   chan struct{}
+	timeoutDone                      chan struct{}
 	p                                *Profile
 	t                                *testing.T
 }
@@ -275,9 +280,13 @@ type checkoutFixture struct {
 func (f *checkoutFixture) handler(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/cart":
+		f.mu.Lock()
 		f.cartReads++
+		cartReads := f.cartReads
+		changed := f.changed
+		f.mu.Unlock()
 		cart := sampleCart()
-		if f.changed && f.cartReads > 1 {
+		if changed && cartReads > 1 {
 			cart["totalPrice"] = "101,00 kr"
 		}
 		writeJSON(w, cart)
@@ -292,18 +301,30 @@ func (f *checkoutFixture) handler(w http.ResponseWriter, r *http.Request) {
 	case "/csrf-token":
 		writeJSON(w, "csrf")
 	case "/checkout/paymentmode":
+		f.mu.Lock()
 		f.modeCalls++
+		f.mu.Unlock()
 		writeJSON(w, Object{})
 	case "/klarna/payment-session":
 		writeJSON(w, Object{"client_token": "synthetic"})
 	case "/singlestepcheckout/placeOrder":
+		f.mu.Lock()
 		f.placeCalls++
+		timeout := f.timeout
+		timeoutStarted := f.timeoutStarted
+		timeoutRelease := f.timeoutRelease
+		timeoutDone := f.timeoutDone
+		f.mu.Unlock()
+		if timeoutDone != nil {
+			defer close(timeoutDone)
+		}
 		saved, e := f.p.Load("payment")
 		if e != nil || saved["state"] != "starting" {
 			f.t.Error("attempt was not saved before submission")
 		}
-		if f.timeout {
-			time.Sleep(60 * time.Millisecond)
+		if timeout {
+			close(timeoutStarted)
+			<-timeoutRelease
 			return
 		}
 		if e := r.ParseForm(); e != nil {
@@ -312,13 +333,25 @@ func (f *checkoutFixture) handler(w http.ResponseWriter, r *http.Request) {
 		if r.Form.Get("saveCard") != "false" || r.Form.Get("selectedCard") != "" {
 			f.t.Error("saved card selected")
 		}
+		f.mu.Lock()
 		f.token = r.Form.Get("klarnaAuthorizationToken")
+		f.mu.Unlock()
 		w.Header().Set("Location", "https://ecom.payex.com/checkout/synthetic")
 		w.WriteHeader(402)
 	default:
 		f.t.Error("unexpected endpoint", r.URL.Path)
 		w.WriteHeader(404)
 	}
+}
+func (f *checkoutFixture) calls() (place, mode int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.placeCalls, f.modeCalls
+}
+func (f *checkoutFixture) authorizationToken() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.token
 }
 func TestCheckoutPersistsAndBlocksDuplicate(t *testing.T) {
 	p := profile(t)
@@ -332,8 +365,8 @@ func TestCheckoutPersistsAndBlocksDuplicate(t *testing.T) {
 	if _, e = a.Checkout(context.Background(), c, p, checkoutOptions()); e == nil {
 		t.Fatal("duplicate allowed")
 	}
-	if f.placeCalls != 1 {
-		t.Fatal(f.placeCalls)
+	if place, _ := f.calls(); place != 1 {
+		t.Fatal(place)
 	}
 	saved, _ := p.Load("payment")
 	if number(saved["status"]) != 402 {
@@ -354,10 +387,11 @@ func TestCheckoutStopsBeforeSideEffects(t *testing.T) {
 			if _, e := a.Checkout(context.Background(), c, p, o); e == nil {
 				t.Fatal("unsafe checkout passed")
 			}
-			if f.placeCalls != 0 {
+			place, mode := f.calls()
+			if place != 0 {
 				t.Fatal("submitted changed order")
 			}
-			if kind != "changed" && f.modeCalls != 0 {
+			if kind != "changed" && mode != 0 {
 				t.Fatal("payment mode changed before validation")
 			}
 			saved, _ := p.Load("payment")
@@ -369,16 +403,35 @@ func TestCheckoutStopsBeforeSideEffects(t *testing.T) {
 }
 func TestTimeoutNeverRetriesPayment(t *testing.T) {
 	p := profile(t)
-	f := &checkoutFixture{p: p, t: t, timeout: true}
+	f := &checkoutFixture{
+		p: p, t: t, timeout: true,
+		timeoutStarted: make(chan struct{}), timeoutRelease: make(chan struct{}), timeoutDone: make(chan struct{}),
+	}
 	c, _ := clientFor(t, p, f.handler)
 	c.HTTP.Timeout = 20 * time.Millisecond
 	a := NewApp(strings.NewReader(""), io.Discard, io.Discard, false)
-	if _, e := a.Checkout(context.Background(), c, p, checkoutOptions()); e == nil {
+	checkoutDone := make(chan error, 1)
+	go func() {
+		_, err := a.Checkout(context.Background(), c, p, checkoutOptions())
+		checkoutDone <- err
+	}()
+	select {
+	case <-f.timeoutStarted:
+	case <-time.After(time.Second):
+		t.Fatal("payment request did not start")
+	}
+	if e := <-checkoutDone; e == nil {
 		t.Fatal("timeout ignored")
 	}
+	close(f.timeoutRelease)
 	saved, _ := p.Load("payment")
-	if saved["state"] != "starting" || f.placeCalls != 1 {
-		t.Fatal(saved, f.placeCalls)
+	select {
+	case <-f.timeoutDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed-out request handler did not finish")
+	}
+	if place, _ := f.calls(); saved["state"] != "starting" || place != 1 {
+		t.Fatal(saved, place)
 	}
 	if _, e := a.Checkout(context.Background(), c, p, checkoutOptions()); e == nil {
 		t.Fatal("duplicate allowed")
@@ -392,11 +445,12 @@ func TestKlarnaTokenPassedToWillys(t *testing.T) {
 	a.Authorize = func(context.Context, Object) (string, error) { return "synthetic-token", nil }
 	o := checkoutOptions()
 	o.Values["method"] = "klarna"
+	o.Bools["experimental-klarna"] = true
 	if _, e := a.Checkout(context.Background(), c, p, o); e != nil {
 		t.Fatal(e)
 	}
-	if f.token != "synthetic-token" {
-		t.Fatal(f.token)
+	if token := f.authorizationToken(); token != "synthetic-token" {
+		t.Fatal(token)
 	}
 }
 func TestKlarnaFailureDoesNotSubmit(t *testing.T) {
@@ -407,8 +461,12 @@ func TestKlarnaFailureDoesNotSubmit(t *testing.T) {
 	a.Authorize = func(context.Context, Object) (string, error) { return "", errors.New("declined") }
 	o := checkoutOptions()
 	o.Values["method"] = "klarna"
-	if _, e := a.Checkout(context.Background(), c, p, o); e == nil || f.placeCalls != 0 {
-		t.Fatal(e, f.placeCalls)
+	o.Bools["experimental-klarna"] = true
+	if _, e := a.Checkout(context.Background(), c, p, o); e == nil {
+		t.Fatal(e)
+	}
+	if place, _ := f.calls(); place != 0 {
+		t.Fatal(place)
 	}
 }
 func TestPaymentURLValidation(t *testing.T) {
@@ -556,7 +614,7 @@ func TestCLISetupSlotsAndPaymentAcrossInvocations(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&address); err != nil {
 				t.Error(err)
 			}
-			cart["deliveryAddress"] = Object{"line1": address["addressLine1"], "postalCode": address["postalCode"]}
+			cart["deliveryAddress"] = Object{"line1": address["addressLine1"], "postalCode": address["postalCode"], "town": address["town"]}
 			writeJSON(w, Object{})
 		case "/slot/homeDelivery":
 			if r.URL.Query().Get("postalCode") != "11111" {
@@ -601,8 +659,8 @@ func TestCLISetupSlotsAndPaymentAcrossInvocations(t *testing.T) {
 	if out := run("payment", "--url"); !strings.Contains(out, "https://ecom.payex.com/checkout/synthetic") {
 		t.Fatal(out)
 	}
-	if f.placeCalls != 1 {
-		t.Fatal("unexpected order count", f.placeCalls)
+	if place, _ := f.calls(); place != 1 {
+		t.Fatal("unexpected order count", place)
 	}
 }
 
@@ -710,8 +768,8 @@ func TestCommaSearchParallelAndPartialFailure(t *testing.T) {
 	})
 	a := NewApp(strings.NewReader(""), io.Discard, io.Discard, false)
 	result, e := a.Search(context.Background(), c, p, " pasta, oats, bad, milk, rice ", 0, 3)
-	if e != nil {
-		t.Fatal(e)
+	if e == nil {
+		t.Fatal("accepted partial search failure")
 	}
 	groups := list(result)
 	if len(groups) != 5 || obj(groups[0])["query"] != "pasta" || obj(groups[2])["error"] == nil || len(list(obj(groups[4])["products"])) != 1 {

@@ -5,7 +5,27 @@ on:
 permissions:
   contents: read
 jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - run: go build ./cmd/willys
+      - if: runner.os != 'Windows'
+        run: sh scripts/test-install.sh
   release:
+    needs: verify
+    if: contains(github.ref_name, '-')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -15,7 +35,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test ./...
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - run: sh scripts/test-install.sh
+      - name: Validate prerelease tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: printf '%s\n' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z][0-9A-Za-z.-]*$'
       - name: Build executables
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -24,4 +51,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dist/willys_*.tar.gz dist/willys_*.zip dist/checksums.txt --verify-tag --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md
+        run: gh release create "$RELEASE_TAG" dist/willys_*.tar.gz dist/willys_*.zip dist/checksums.txt --verify-tag --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md --prerelease

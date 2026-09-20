@@ -65,5 +65,13 @@ func (a *App) Search(ctx context.Context, c *Client, p *Profile, query string, p
 		}()
 	}
 	workers.Wait()
+	if err := ctx.Err(); err != nil {
+		return results, err
+	}
+	for _, group := range results {
+		if obj(group)["error"] != nil {
+			return results, failure("partial_failure", "Some searches failed. Successful groups remain in the output.", 3, nil)
+		}
+	}
 	return results, nil
 }

@@ -26,7 +26,7 @@ Usage: willys [--profile NAME] [--json] COMMAND [OPTIONS]
 Commands:
   search QUERY [--page N] [--limit N]    Search products; separate terms with commas
   product CODE [--details]              Show a product
-  cart [--details]                      Show the cart and payment reservation
+  cart [reset] [--details]              Show the cart or start an empty cart
   set CODE QUANTITY [--unit UNIT]       Set the final quantity
   remove CODE [--unit UNIT]             Remove a product
   stores [QUERY] [--pickup] [--all] [--details]
@@ -34,7 +34,7 @@ Commands:
   slots [--choose]                      List available delivery or pickup times
   slot NUMBER                          Reserve a time from the latest list
   checkout                             Choose a payment method and start payment
-  payment [--url]                       Reopen the existing payment URL
+  payment [status|recover] [--url]      Inspect or reopen a saved payment
   session [--import-cookies FILE]       Show storage or import Netscape cookies
   version                              Show the version
 
@@ -46,7 +46,7 @@ var commandOptions = map[string]map[string]bool{
 	"search": {"page": false, "limit": false}, "product": {"details": true}, "cart": {"details": true},
 	"set": {"unit": false}, "remove": {"unit": false}, "stores": {"pickup": true, "all": true, "details": true},
 	"setup": {"first-name": false, "last-name": false, "phone": false, "email": false, "street": false, "postcode": false, "town": false, "store": false, "mode": false},
-	"slots": {"choose": true}, "slot": {}, "checkout": {"method": false, "no-open": true, "yes": true, "expected-total": false, "expected-reservation": false},
+	"slots": {"choose": true}, "slot": {}, "checkout": {"method": false, "no-open": true, "yes": true, "expected-total": false, "expected-reservation": false, "experimental-klarna": true},
 	"payment": {"url": true}, "session": {"import-cookies": false}, "version": {},
 }
 
@@ -151,6 +151,7 @@ func (o Options) Int(name string, def int) (int, error) {
 }
 
 type App struct {
+	ctx         context.Context
 	Connect     func(*Profile) (*Client, error)
 	In          *bufio.Reader
 	Out, Err    io.Writer
@@ -174,10 +175,36 @@ func (a *App) Ask(label, def string) (string, error) {
 		fmt.Fprintf(a.Err, " [%s]", def)
 	}
 	fmt.Fprint(a.Err, ": ")
-	value, err := a.In.ReadString('\n')
-	if err != nil {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	type input struct {
+		value string
+		err   error
+	}
+	ready := make(chan input, 1)
+	go func() { value, err := a.In.ReadString('\n'); ready <- input{value, err} }()
+	var value string
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case result := <-ready:
+		value = result.value
+		if result.err != nil && !(errors.Is(result.err, io.EOF) && value != "") {
+			if errors.Is(result.err, io.EOF) {
+				return "", failure("input_closed", "Input closed. Command cancelled.", 130, nil)
+			}
+			return "", result.err
+		}
+	}
+	if strings.TrimSpace(value) == "/cancel" {
+		return "", context.Canceled
+	}
+
 	value = strings.TrimSpace(value)
 	if value == "" {
 		value = def
@@ -194,15 +221,18 @@ func (a *App) Choose(choices []Choice, label string) (string, error) {
 	for i, c := range choices {
 		fmt.Fprintf(a.Err, "%d. %s\n", i+1, c.Label)
 	}
-	s, err := a.Ask(label, "")
-	if err != nil {
-		return "", err
+	for {
+		s, err := a.Ask(label, "")
+		if err != nil {
+			return "", err
+		}
+		n, err := strconv.Atoi(s)
+		if err == nil && n >= 1 && n <= len(choices) {
+			return choices[n-1].Value, nil
+		}
+		fmt.Fprintln(a.Err, "Choose one of the displayed numbers, or type /cancel.")
 	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n < 1 || n > len(choices) {
-		return "", errors.New("choose one of the displayed numbers")
-	}
-	return choices[n-1].Value, nil
+
 }
 func Emit(w io.Writer, value any, raw bool) error {
 	if raw {
@@ -253,9 +283,11 @@ func Emit(w io.Writer, value any, raw bool) error {
 	return nil
 }
 func (a *App) Execute(ctx context.Context, args []string) error {
+	ctx = context.WithValue(ctx, lockNoticeKey{}, a.Err)
+	a.ctx = ctx
 	o, err := Parse(args)
 	if err != nil {
-		return err
+		return failure("invalid_arguments", err.Error(), 2, err)
 	}
 	if o.Command == "version" {
 		fmt.Fprintf(a.Out, "willys %s\n", Version)
@@ -293,14 +325,16 @@ func (a *App) Execute(ctx context.Context, args []string) error {
 		return err
 	}
 	defer release()
+	if a.Interactive && (o.Command == "setup" || o.Command == "checkout" || (o.Command == "slots" && o.Bools["choose"])) {
+		fmt.Fprintln(a.Err, "Press Ctrl+C or type /cancel to cancel.")
+	}
 	result, err := a.Run(ctx, p, o)
-	if err != nil {
-		return err
+	if result != nil {
+		if emitErr := Emit(a.Out, result, o.JSON); emitErr != nil {
+			return emitErr
+		}
 	}
-	if result == nil {
-		return nil
-	}
-	return Emit(a.Out, result, o.JSON)
+	return err
 }
 func paymentPending(p *Profile) error {
 	v, err := p.Load("payment")
@@ -308,7 +342,7 @@ func paymentPending(p *Profile) error {
 		return err
 	}
 	if v != nil {
-		return errors.New("this profile has a payment attempt; use willys payment and resolve it before changing checkout")
+		return failure("payment_unresolved", "This profile has a payment attempt. Run willys payment status before changing checkout.", 1, nil)
 	}
 	return nil
 }
@@ -335,6 +369,9 @@ func (a *App) Run(ctx context.Context, p *Profile, o Options) (any, error) {
 			}
 		}
 		return Object{"profile": o.Profile, "storage": p.Path}, nil
+	}
+	if o.Command == "payment" && len(o.Positionals) == 0 {
+		return a.OpenSavedPayment(p, o)
 	}
 	// Establish one shared server session before concurrent requests start.
 	initRelease, err := acquire(ctx, filepath.Join(p.Path, "session-init.lock"), false)
@@ -389,6 +426,9 @@ func (a *App) Run(ctx context.Context, p *Profile, o Options) (any, error) {
 		}
 		return ProductView(d, nil, o.Bools["details"]), nil
 	case "cart":
+		if len(o.Positionals) == 1 && o.Positionals[0] == "reset" {
+			return a.ResetCart(ctx, c, p)
+		}
 		if err = o.Arity(0, 0); err != nil {
 			return nil, err
 		}
@@ -507,26 +547,36 @@ func (a *App) Run(ctx context.Context, p *Profile, o Options) (any, error) {
 		}
 		return a.Checkout(ctx, c, p, o)
 	case "payment":
+		if len(o.Positionals) == 1 && (o.Positionals[0] == "status" || o.Positionals[0] == "recover") {
+			if o.Bools["url"] {
+				return nil, failure("invalid_arguments", "--url applies only to willys payment, without status or recover.", 2, nil)
+			}
+			return a.PaymentStatus(ctx, c, p, o.Positionals[0] == "recover")
+		}
 		if err = o.Arity(0, 0); err != nil {
 			return nil, err
 		}
-		saved, e := p.Load("payment")
-		if e != nil {
-			return nil, e
-		}
-		if saved == nil {
-			return nil, errors.New("no saved payment; run willys checkout first")
-		}
-		u, e := PaymentURL(text(saved["location"]))
-		if e != nil {
-			return nil, errors.New("saved payment has no supported URL; resolve the attempt before retrying")
-		}
-		if !o.Bools["url"] {
-			if e = a.Open(u); e != nil {
-				return nil, fmt.Errorf("payment URL is saved; use willys payment --url: %w", e)
-			}
-		}
-		return Object{"url": u, "state": "payment completion is not verified by this CLI"}, nil
+		return a.OpenSavedPayment(p, o)
 	}
 	return nil, errors.New("unknown command")
+}
+
+func (a *App) OpenSavedPayment(p *Profile, o Options) (any, error) {
+	saved, e := p.Load("payment")
+	if e != nil {
+		return nil, e
+	}
+	if saved == nil {
+		return nil, errors.New("no saved payment; run willys checkout first")
+	}
+	u, e := PaymentURL(text(saved["location"]))
+	if e != nil {
+		return nil, errors.New("saved payment has no supported URL; resolve the attempt before retrying")
+	}
+	if !o.Bools["url"] {
+		if e = a.Open(u); e != nil {
+			return nil, fmt.Errorf("payment URL is saved; use willys payment --url: %w", e)
+		}
+	}
+	return Object{"url": u, "state": "payment completion is not verified by this CLI"}, nil
 }

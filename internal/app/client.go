@@ -21,9 +21,10 @@ type Response struct {
 	Body     string `json:"body"`
 }
 type Client struct {
-	Base    string
-	HTTP    *http.Client
-	Cookies *CookieStore
+	OrderSubmitted bool
+	Base           string
+	HTTP           *http.Client
+	Cookies        *CookieStore
 }
 
 func NewClient(p *Profile) (*Client, error) {
@@ -99,6 +100,9 @@ func (c *Client) request(ctx context.Context, method, endpoint string, q url.Val
 			}
 		}
 	}()
+	if endpoint == "/singlestepcheckout/placeOrder" {
+		c.OrderSubmitted = true
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request did not finish; no automatic retry: %w", err)
@@ -115,7 +119,7 @@ func (c *Client) request(ctx context.Context, method, endpoint string, q url.Val
 		var message Object
 		_ = json.Unmarshal(b, &message)
 		detail := text(first(message["errorMessage"], message["error"], http.StatusText(resp.StatusCode)))
-		return nil, fmt.Errorf("Willys returned HTTP %d: %s", resp.StatusCode, detail)
+		return nil, failure("api_error", fmt.Sprintf("Willys returned HTTP %d: %s", resp.StatusCode, detail), 1, nil)
 	}
 	if len(b) == 0 {
 		return nil, nil

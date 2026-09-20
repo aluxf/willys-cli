@@ -4,7 +4,7 @@ An unofficial CLI for shopping at Willys Sweden through its internal HTTP API.
 The CLI stores sessions automatically. Shopping commands do not use a browser.
 Payment opens in your normal browser.
 
-This is an alpha release. Willys can change its internal API without notice.
+This is a beta release. Willys can change its internal API without notice.
 This project has no affiliation with Willys, Axfood, Klarna, or Swedbank Pay.
 
 ## Install
@@ -18,7 +18,8 @@ curl -fsSL https://raw.githubusercontent.com/aluxf/willys-cli/main/install.sh | 
 The installer downloads a standalone binary and verifies its SHA-256 checksum.
 You do not need Python, Go, or a package manager.
 It installs into `~/.local/bin`. Follow the printed PATH instruction if needed.
-Set `WILLYS_INSTALL_DIR` to choose another directory, or `WILLYS_VERSION=v0.1.0` to select a release.
+The installer defaults to the reviewed beta, `v0.2.0-beta.1`.
+Set `WILLYS_INSTALL_DIR` to choose another directory, or `WILLYS_VERSION` to select a release.
 Run the installer again to update.
 
 Windows users can download a ZIP from [Releases](https://github.com/aluxf/willys-cli/releases).
@@ -35,6 +36,7 @@ willys set 101240218_ST 10
 willys cart
 willys cart --details
 willys remove 101240218_ST
+willys cart reset
 ```
 
 `set` sets the final quantity. It does not add that quantity to the previous amount.
@@ -49,6 +51,11 @@ The CLI does not automatically match a shopping description to a product.
 Cart output includes brand, pack size, prices, discounts, product links, and the payment reservation.
 `--details` includes images, ingredients, nutrition, and full product data.
 Missing API fields remain empty. They do not imply zero or unavailable stock.
+
+`cart reset` empties the cart with one bulk-clear request and verifies the result.
+It keeps the session and contact defaults, and invalidates cached slot choices.
+It does not remove products individually or cancel an existing order.
+The CLI refuses reset while a payment attempt remains unresolved.
 
 ## Stores and delivery
 
@@ -68,6 +75,10 @@ These counts are a snapshot from 20 September 2026.
 
 `setup` prompts for contact details, fulfillment method, and address or pickup store.
 It remembers your inputs for the next setup. You do not need to create JSON files.
+Press Ctrl+C or type `/cancel` to cancel a prompt.
+Invalid interactive fields prompt for correction. Invalid flags fail without prompting.
+Setup verifies the returned delivery address or pickup store before reporting success.
+A failure during saving identifies the affected step. Earlier server changes can remain saved.
 Use flags such as `--first-name`, `--last-name`, `--phone`, `--email`, `--mode`, `--street`, `--postcode`, and `--town` for scripts.
 For pickup, use `--mode pickup --store STORE_ID`.
 
@@ -80,6 +91,8 @@ The server remains the authority for availability and reservation expiry.
 ```sh
 willys checkout
 willys payment
+willys payment status
+willys payment recover
 ```
 
 `checkout` asks which available payment method to use.
@@ -87,7 +100,12 @@ It shows the cart total and the card reservation, including Willys' buffer.
 It asks before starting a real payment.
 A saved payment attempt prevents accidental repeat submission within the profile.
 `payment` reopens the saved URL. It does not start another payment.
-`payment --url` prints that URL instead.
+`payment --url` prints that URL instead. Saved payment URLs work without an API connection.
+`payment status` shows the saved attempt and current cart without claiming payment completion.
+`payment recover` archives a request only when the CLI proves it never reached the order endpoint.
+It also checks that the current cart matches the attempt and has no order reference.
+Sent, timed-out, and legacy attempts remain protected until their outcomes can be verified.
+A missing URL, empty cart, or HTTP error does not prove that an order failed.
 
 For scripts, use `checkout --method card --yes --expected-total "323,25 kr" --expected-reservation "339,78 kr"`.
 The values must match the current cart. Use `--no-open` to receive the URL without opening a browser.
@@ -102,7 +120,8 @@ The shopper enters payment details on the provider page. The CLI does not collec
 
 ### Klarna: experimental
 
-Klarna is selectable when Willys offers it for the cart.
+Klarna is disabled by default during beta testing.
+Use `checkout --experimental-klarna` to expose it when Willys offers it for the cart.
 Willys uses Klarna's browser SDK, not a simple payment-mode toggle.
 The CLI opens a temporary local page in your default browser.
 That page requests authorization through Klarna's SDK and returns the token to the CLI.
@@ -120,7 +139,9 @@ The CLI does not automate credit decisions, payment approval, or BankID.
 Payment completion, order cancellation, and account login are not implemented.
 Pickup setup and Klarna authorization remain unverified live.
 The CLI retains failed or uncertain payment attempts to prevent duplicate orders.
-There is no automatic reset of those attempts. Resolve the provider/order status before retrying.
+Unsubmitted attempts have a recovery command. Other attempts require provider or Willys verification.
+The CLI cannot automatically reconcile completed, cancelled, or expired hosted payment sessions.
+Do not delete payment state files or reset cookies to bypass an uncertain outcome.
 Do not operate on the same shopper through multiple profiles.
 
 ## Sessions and scripting
@@ -153,7 +174,8 @@ go test -race ./...
 go vet ./...
 go build -o willys ./cmd/willys
 sh scripts/test-install.sh
-scripts/release.sh 0.1.0
+go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+scripts/release.sh 0.2.0-beta.1
 ```
 
 Tests use synthetic data. They do not place orders or request live credit authorization.
@@ -178,3 +200,14 @@ The CLI initializes a new session once before concurrent requests start.
 Cookie saves merge individual changes under a short file lock.
 Locks coordinate this CLI on one computer. They cannot coordinate browsers or other computers.
 Close older CLI processes before using this version with the same profile.
+
+## Errors and release checks
+
+Normal output uses stdout. Prompts, progress, and errors use stderr.
+With `--json`, command errors use a JSON object containing `error.code`, `error.message`, and `exitCode`.
+Batch search preserves successful results on stdout when another term fails.
+Exit status is 0 for success, 1 for failure, 2 for parsing errors, 3 for partial search failure, and 130 for cancellation.
+
+Release publication waits for Linux, macOS, and Windows checks on the tagged commit.
+These checks include race tests, vet, vulnerability scanning, and executable builds.
+Unix runners also check the curl installer. Current releases publish as prereleases.

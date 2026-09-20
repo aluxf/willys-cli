@@ -122,8 +122,13 @@ func (s *CookieStore) SetCookies(u *url.URL, cookies []*http.Cookie) {
 		s.records[key] = savedCookie{origin.String(), c}
 	}
 }
-func (s *CookieStore) Save() error                       { return s.syncStorage(context.Background(), true) }
+func (s *CookieStore) Save() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return s.syncStorage(ctx, true)
+}
 func (s *CookieStore) Refresh(ctx context.Context) error { return s.syncStorage(ctx, false) }
+
 func (s *CookieStore) syncStorage(ctx context.Context, save bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

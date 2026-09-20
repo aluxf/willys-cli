@@ -19,6 +19,73 @@ func (a *App) field(o Options, key, label string, saved any) (string, error) {
 	}
 	return a.Ask(label, text(saved))
 }
+
+func normalizeText(value string) (string, error) {
+	return strings.Join(strings.Fields(value), " "), nil
+}
+
+func normalizePhone(value string) (string, error) {
+	value = strings.ReplaceAll(value, " ", "")
+	if strings.HasPrefix(value, "+46") {
+		value = "0" + strings.TrimPrefix(value, "+46")
+	}
+	if !regexp.MustCompile(`^07[0-9]{8}$`).MatchString(value) {
+		return "", errors.New("use a Swedish mobile number such as 07XXXXXXXX or +467XXXXXXXX")
+	}
+	return value, nil
+}
+
+func normalizeEmail(value string) (string, error) {
+	email, err := mail.ParseAddress(value)
+	if err != nil || email.Address != value {
+		return "", errors.New("enter a valid email address")
+	}
+	return value, nil
+}
+
+func normalizePostcode(value string) (string, error) {
+	value = strings.ReplaceAll(value, " ", "")
+	if !regexp.MustCompile(`^[0-9]{5}$`).MatchString(value) {
+		return "", errors.New("postcode must have five digits")
+	}
+	return value, nil
+}
+
+func (a *App) setupField(o Options, key, label string, saved any, normalize func(string) (string, error)) (string, error) {
+	if value, present := o.Values[key]; present && strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("%s is required", label)
+	}
+	for {
+		value, err := a.field(o, key, label, saved)
+		if err != nil {
+			return "", err
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			err = fmt.Errorf("%s is required", label)
+		} else {
+			value, err = normalize(value)
+		}
+		if err == nil {
+			return value, nil
+		}
+		if _, present := o.Values[key]; present || !a.Interactive {
+			return "", err
+		}
+		fmt.Fprintf(a.Err, "%s. Enter a valid value, or type /cancel.\n", err)
+	}
+}
+
+func sameAddress(actual, expected Object) bool {
+	line := text(first(actual["line1"], actual["addressLine1"]))
+	postcode := text(first(actual["postalCode"], actual["postcode"]))
+	town := text(actual["town"])
+	line, _ = normalizeText(line)
+	postcode, _ = normalizePostcode(postcode)
+	town, _ = normalizeText(town)
+	return strings.EqualFold(line, text(expected["addressLine1"])) && postcode == text(expected["postalCode"]) && strings.EqualFold(town, text(expected["town"]))
+}
+
 func (a *App) Setup(ctx context.Context, c *Client, p *Profile, o Options) (any, error) {
 	current, err := c.Cart(ctx)
 	if err != nil {
@@ -32,27 +99,20 @@ func (a *App) Setup(ctx context.Context, c *Client, p *Profile, o Options) (any,
 		return nil, err
 	}
 	fields := Object{}
-	for _, f := range [][3]string{{"first-name", "firstName", "First name"}, {"last-name", "lastName", "Last name"}, {"phone", "cellphone", "Mobile number"}, {"email", "email", "Email"}} {
-		value, e := a.field(o, f[0], f[2], saved[f[1]])
+	for _, f := range []struct {
+		key, saved, label string
+		normalize         func(string) (string, error)
+	}{
+		{"first-name", "firstName", "First name", normalizeText},
+		{"last-name", "lastName", "Last name", normalizeText},
+		{"phone", "cellphone", "Mobile number", normalizePhone},
+		{"email", "email", "Email", normalizeEmail},
+	} {
+		value, e := a.setupField(o, f.key, f.label, saved[f.saved], f.normalize)
 		if e != nil {
 			return nil, e
 		}
-		if value == "" {
-			return nil, fmt.Errorf("%s is required", f[2])
-		}
-		fields[f[1]] = value
-	}
-	phone := strings.ReplaceAll(text(fields["cellphone"]), " ", "")
-	if strings.HasPrefix(phone, "+46") {
-		phone = "0" + strings.TrimPrefix(phone, "+46")
-	}
-	if !regexp.MustCompile(`^07[0-9]{8}$`).MatchString(phone) {
-		return nil, errors.New("use a Swedish mobile number such as 07XXXXXXXX or +467XXXXXXXX")
-	}
-	fields["cellphone"] = phone
-	email, e := mail.ParseAddress(text(fields["email"]))
-	if e != nil || email.Address != text(fields["email"]) {
-		return nil, errors.New("enter a valid email address")
+		fields[f.saved] = value
 	}
 	mode := o.Values["mode"]
 	if mode == "" {
@@ -70,21 +130,20 @@ func (a *App) Setup(ctx context.Context, c *Client, p *Profile, o Options) (any,
 			return nil, e
 		}
 		address = clone(fields)
-		for _, f := range [][3]string{{"street", "addressLine1", "Street address"}, {"postcode", "postalCode", "Postcode"}, {"town", "town", "Town"}} {
-			v, e := a.field(o, f[0], f[2], prior[f[1]])
+		for _, f := range []struct {
+			key, saved, label string
+			normalize         func(string) (string, error)
+		}{
+			{"street", "addressLine1", "Street address", normalizeText},
+			{"postcode", "postalCode", "Postcode", normalizePostcode},
+			{"town", "town", "Town", normalizeText},
+		} {
+			v, e := a.setupField(o, f.key, f.label, prior[f.saved], f.normalize)
 			if e != nil {
 				return nil, e
 			}
-			if v == "" {
-				return nil, fmt.Errorf("%s is required", f[2])
-			}
-			address[f[1]] = v
+			address[f.saved] = v
 		}
-		code := strings.ReplaceAll(text(address["postalCode"]), " ", "")
-		if !regexp.MustCompile(`^[0-9]{5}$`).MatchString(code) {
-			return nil, errors.New("postcode must have five digits")
-		}
-		address["postalCode"] = code
 	case "pickup":
 		value, e := c.Get(ctx, "/store", url.Values{"clickAndCollect": {"true"}})
 		if e != nil {
@@ -115,41 +174,50 @@ func (a *App) Setup(ctx context.Context, c *Client, p *Profile, o Options) (any,
 	}
 	// Collect and validate all inputs before changing the checkout.
 	if _, err = c.Post(ctx, "/cart/customer-contact-info", nil, fields); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("setup did not confirm contact details; check the cart: %w", err)
 	}
 	if err = p.Save("contact", fields); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("contact details are saved in the cart but not in this profile: %w", err)
 	}
 	if mode == "delivery" {
 		if _, err = c.Post(ctx, "/cart/postal-code", url.Values{"postalCode": {text(address["postalCode"])}}, nil); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("contact details are saved; setup did not confirm the postcode: %w", err)
 		}
 		if _, err = c.Post(ctx, "/cart/delivery-mode/homeDelivery", nil, nil); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("contact details and postcode are saved; setup did not confirm home delivery: %w", err)
 		}
 		if _, err = c.Post(ctx, "/cart/delivery-address", nil, address); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("contact details, postcode, and home delivery are saved; setup did not confirm the address: %w", err)
 		}
 		if err = p.Save("address", address); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("delivery address is saved in the cart but not in this profile: %w", err)
 		}
 	} else {
 		if _, err = c.Post(ctx, "/store/activate", url.Values{"storeId": {storeID}, "activelySelected": {"true"}, "forceAsPickingStore": {"true"}}, nil); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("contact details are saved; setup did not confirm pickup-store activation: %w", err)
 		}
 		if _, err = c.Post(ctx, "/cart/delivery-mode/pickUpInStore", url.Values{"newSuggestedStoreId": {storeID}}, nil); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("contact details and pickup-store activation are saved; setup did not confirm pickup mode: %w", err)
 		}
 	}
 	after, err := c.Cart(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("setup changed fulfillment but could not verify it; check the cart: %w", err)
 	}
-	if mode == "delivery" && (text(after["deliveryModeCode"]) != "homeDelivery" || text(obj(after["deliveryAddress"])["line1"]) == "") {
-		return nil, errors.New("delivery setup was not saved; check your profile")
+	if mode == "delivery" && (text(after["deliveryModeCode"]) != "homeDelivery" || !sameAddress(obj(after["deliveryAddress"]), address)) {
+		return nil, errors.New("delivery setup differs from the requested address; check the cart")
 	}
-	if mode == "pickup" && !isPickup(text(after["deliveryModeCode"])) {
-		return nil, errors.New("pickup setup was not saved")
+	if mode == "pickup" {
+		if !isPickup(text(after["deliveryModeCode"])) {
+			return nil, errors.New("pickup setup was not saved; check the cart")
+		}
+		store, e := c.Get(ctx, "/store/active", nil)
+		if e != nil {
+			return nil, fmt.Errorf("pickup mode is saved but the active store was not verified: %w", e)
+		}
+		if text(obj(store)["storeId"]) != storeID {
+			return nil, errors.New("pickup setup selected a different store; check the cart")
+		}
 	}
 	if err = p.Save("slots", Object{}); err != nil {
 		return nil, err
@@ -346,6 +414,9 @@ func (a *App) Checkout(ctx context.Context, c *Client, p *Profile, o Options) (a
 			choices = append(choices, Choice{"Card — hosted Swedbank Pay page", "card"})
 			valid["card"] = true
 		case "Klarna":
+			if !o.Bools["experimental-klarna"] {
+				continue
+			}
 			choices = append(choices, Choice{"Klarna — experimental browser authorization", "klarna"})
 			valid["klarna"] = true
 		}
@@ -357,9 +428,13 @@ func (a *App) Checkout(ctx context.Context, c *Client, p *Profile, o Options) (a
 			return nil, err
 		}
 	}
+	if method == "klarna" && !o.Bools["experimental-klarna"] {
+		return nil, errors.New("Klarna is experimental; pass --experimental-klarna to enable it")
+	}
 	if !valid[method] {
 		return nil, errors.New("this payment method is unavailable")
 	}
+
 	if o.Bools["yes"] {
 		if o.Values["expected-total"] == "" || o.Values["expected-reservation"] == "" || o.Values["expected-total"] != text(cart["totalPrice"]) || o.Values["expected-reservation"] != text(cart["reservedAmount"]) {
 			return nil, errors.New("--yes requires matching --expected-total and --expected-reservation")
@@ -411,7 +486,14 @@ func (a *App) Checkout(ctx context.Context, c *Client, p *Profile, o Options) (a
 	}
 	response, err := c.Place(ctx, url.Values{"saveCard": {"false"}, "selectedCard": {""}, "orderRef": {"null"}, "klarnaAuthorizationToken": {token}, "userClickedContinue": {"false"}})
 	if err != nil {
-		return nil, err
+		if !c.OrderSubmitted {
+			attempt["state"] = "not_submitted"
+			if saveErr := p.Save("payment", attempt); saveErr != nil {
+				return nil, errors.Join(err, saveErr)
+			}
+			return nil, fmt.Errorf("payment was not submitted; run willys payment recover: %w", err)
+		}
+		return nil, fmt.Errorf("payment outcome is unknown; do not retry checkout; run willys payment status: %w", err)
 	}
 	attempt["state"] = "response"
 	attempt["status"] = response.Status

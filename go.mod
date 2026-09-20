@@ -1,6 +1,6 @@
 module github.com/aluxf/willys-cli
 
-go 1.26.4
+go 1.26.6
 
 require (
 	github.com/gofrs/flock v0.13.1

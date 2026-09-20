@@ -4,21 +4,38 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
 )
 
+type lockNoticeKey struct{}
+
 func acquire(ctx context.Context, file string, shared bool) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	l := flock.New(file)
 	var ok bool
 	var err error
 	if shared {
-		ok, err = l.TryRLockContext(ctx, 25*time.Millisecond)
+		ok, err = l.TryRLock()
 	} else {
-		ok, err = l.TryLockContext(ctx, 25*time.Millisecond)
+		ok, err = l.TryLock()
+	}
+	if err == nil && !ok {
+		if w, yes := ctx.Value(lockNoticeKey{}).(io.Writer); yes && !strings.HasSuffix(file, "cookies.json.lock") {
+			fmt.Fprintln(w, "Waiting for another command. Press Ctrl+C to cancel.")
+		}
+		if shared {
+			ok, err = l.TryRLockContext(ctx, 25*time.Millisecond)
+		} else {
+			ok, err = l.TryLockContext(ctx, 25*time.Millisecond)
+		}
 	}
 	if err != nil || !ok {
 		l.Close()
@@ -39,6 +56,10 @@ func commandLock(ctx context.Context, p *Profile, o Options) (func(), error) {
 	switch o.Command {
 	case "checkout", "setup", "slots", "slot":
 		shared = false
+	case "cart":
+		shared = !(len(o.Positionals) == 1 && o.Positionals[0] == "reset")
+	case "payment":
+		shared = !(len(o.Positionals) == 1 && o.Positionals[0] == "recover")
 	case "session":
 		shared = o.Values["import-cookies"] == ""
 	}
