@@ -4,6 +4,8 @@ An unofficial CLI for shopping at Willys Sweden through its internal HTTP API.
 The CLI stores sessions automatically. Shopping commands do not use a browser.
 Payment opens in your normal browser.
 
+Agents: read the short [usage guide](AGENTS.md) before shopping.
+
 This is a beta release. Willys can change its internal API without notice.
 This project has no affiliation with Willys, Axfood, Klarna, or Swedbank Pay.
 
