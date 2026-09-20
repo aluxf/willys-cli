@@ -24,22 +24,61 @@ const usage = `willys — shop at Willys through HTTP
 Usage: willys [--profile NAME] [--json] COMMAND [OPTIONS]
 
 Commands:
-  search QUERY [--page N] [--limit N]    Search products; separate terms with commas
-  product CODE [--details]              Show a product
-  cart [reset] [--details]              Show the cart or start an empty cart
-  set CODE QUANTITY [--unit UNIT]       Set the final quantity
-  remove CODE [--unit UNIT]             Remove a product
+  search "TERM, TERM" [--page N] [--limit N]  Search products; limit applies per term
+  product CODE [--details]                  Show brand, size, price, and product link
+  cart [--details]                          Show products, total, and reservation
+  cart reset                               Empty the cart with one bulk request
+  set CODE QUANTITY [--unit pieces|kilogram] Set the final quantity; never increments
+  remove CODE [--unit pieces|kilogram]       Remove one product
   stores [QUERY] [--pickup] [--all] [--details]
-  setup                                Save contact and delivery details
-  slots [--choose]                      List available delivery or pickup times
-  slot NUMBER                          Reserve a time from the latest list
-  checkout                             Choose a payment method and start payment
-  payment [status|recover] [--url]      Inspect or reopen a saved payment
-  session [--import-cookies FILE]       Show storage or import Netscape cookies
-  version                              Show the version
+  setup                                    Save contact and delivery or pickup details
+  slots [--choose]                          List times, optionally choose interactively
+  slot NUMBER                              Reserve a time from the latest slot list
+  checkout                                 Choose a payment method and start payment
+  payment [--url]                           Reopen or print the saved payment link
+  payment status                           Inspect the saved attempt and current cart
+  payment recover                          Recover only a proven unsubmitted attempt
+  session [--import-cookies FILE]           Show storage or import into a new profile
+  version                                  Show the installed version
 
-Global options: --profile NAME, --json, --help, --version
-Use willys COMMAND --help for command options.
+Setup flags (omit them for interactive prompts):
+  --first-name NAME --last-name NAME --phone NUMBER --email EMAIL
+  --mode delivery --street ADDRESS --postcode CODE --town TOWN
+  --mode pickup --store STORE_ID
+
+Checkout flags:
+  --method card|klarna   Select the user's chosen method; omit to ask
+  --no-open             Do not open the final payment link
+  --yes --expected-total "AMOUNT kr" --expected-reservation "AMOUNT kr"
+                        Start without a prompt; both amounts must match the current cart
+  --experimental-klarna Enable the unverified Klarna browser flow
+
+Example workflow:
+  willys cart
+  willys search "penne, Pepsi Max" --limit 3
+  willys product CODE
+  willys set CODE 2
+  willys setup
+  willys slots
+  willys slot 1
+  willys cart
+  willys checkout
+
+Usage notes:
+  Verify brand, pack size, quantity, and price before adding products.
+  Swedish catalog terms work best. --details adds images, ingredients, and nutrition to products.
+  Use the same profile throughout an order. Default terminals share the same saved cart.
+  Different-product updates can run together. Conflicting commands wait automatically.
+  Review delivery fees and the reservation buffer before starting an authorized purchase.
+  Never retry an uncertain payment. Check payment status; never delete state to bypass protection.
+  The user completes payment and BankID. A payment link does not prove purchase completion.
+  Cancel prompts with Ctrl+C or /cancel. Failed batch searches retain successful results.
+
+Global options:
+  --profile NAME  Use a separate saved session and cart; default: default
+  --json          Structured output for automated parsing; normal text is the default
+  --help, -h      Show this global guide without contacting Willys
+  --version       Show the installed version
 `
 
 var commandOptions = map[string]map[string]bool{
@@ -289,29 +328,15 @@ func (a *App) Execute(ctx context.Context, args []string) error {
 	if err != nil {
 		return failure("invalid_arguments", err.Error(), 2, err)
 	}
+	if o.Help || o.Command == "" {
+		fmt.Fprint(a.Out, usage)
+		return nil
+	}
 	if o.Command == "version" {
 		fmt.Fprintf(a.Out, "willys %s\n", Version)
 		return nil
 	}
-	if o.Help || o.Command == "" {
-		fmt.Fprint(a.Out, usage)
-		if m, ok := commandOptions[o.Command]; ok {
-			fmt.Fprintf(a.Out, "\n%s options:\n", o.Command)
-			keys := []string{}
-			for k := range m {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				tail := " VALUE"
-				if m[k] {
-					tail = ""
-				}
-				fmt.Fprintf(a.Out, "  --%s%s\n", k, tail)
-			}
-		}
-		return nil
-	}
+
 	root, err := DataRoot()
 	if err != nil {
 		return err

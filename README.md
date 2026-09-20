@@ -4,7 +4,8 @@ An unofficial CLI for shopping at Willys Sweden through its internal HTTP API.
 The CLI stores sessions automatically. Shopping commands do not use a browser.
 Payment opens in your normal browser.
 
-Agents: read the short [usage guide](AGENTS.md) before shopping.
+Run `willys` or `willys --help` for the complete command guide and shopping workflow.
+All command-level `--help` flags show the same global guide.
 
 This is a beta release. Willys can change its internal API without notice.
 This project has no affiliation with Willys, Axfood, Klarna, or Swedbank Pay.
@@ -20,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/aluxf/willys-cli/main/install.sh | 
 The installer downloads a standalone binary and verifies its SHA-256 checksum.
 You do not need Python, Go, or a package manager.
 It installs into `~/.local/bin`. Follow the printed PATH instruction if needed.
-The installer defaults to the reviewed beta, `v0.2.0-beta.1`.
+The installer defaults to the reviewed beta, `v0.2.0-beta.2`.
 Set `WILLYS_INSTALL_DIR` to choose another directory, or `WILLYS_VERSION` to select a release.
 Run the installer again to update.
 
@@ -154,7 +155,6 @@ willys --json cart
 willys session
 willys --profile imported session --import-cookies /path/to/cookies.txt
 willys --help
-willys checkout --help
 ```
 
 Each profile has its own cookies, setup information, slot cache, and payment response.
