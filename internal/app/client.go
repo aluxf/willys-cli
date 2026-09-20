@@ -45,6 +45,11 @@ func (c *Client) request(ctx context.Context, method, endpoint string, q url.Val
 	if !strings.HasPrefix(endpoint, "/") || strings.ContainsAny(endpoint, "?#") || strings.Contains(endpoint, "://") {
 		return nil, errors.New("invalid API endpoint")
 	}
+	if c.Cookies != nil {
+		if err := c.Cookies.Refresh(ctx); err != nil {
+			return nil, err
+		}
+	}
 	target := c.Base + endpoint
 	if len(q) > 0 {
 		target += "?" + q.Encode()

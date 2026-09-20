@@ -142,9 +142,9 @@ func TestCookiePersistenceAndDeletion(t *testing.T) {
 			t.Fatal("deleted cookie returned")
 		}
 	}
-	for key, r := range third.records {
+	for _, r := range third.records {
 		r.Cookie.Expires = time.Now().Add(-time.Hour)
-		third.records[key] = r
+		third.SetCookies(u, []*http.Cookie{&r.Cookie})
 	}
 	_ = third.Save()
 	last, _ := NewCookieStore(p)
@@ -603,5 +603,85 @@ func TestCLISetupSlotsAndPaymentAcrossInvocations(t *testing.T) {
 	}
 	if f.placeCalls != 1 {
 		t.Fatal("unexpected order count", f.placeCalls)
+	}
+}
+
+func TestProductLocksAndCheckout(t *testing.T) {
+	p := profile(t)
+	ctx := context.Background()
+	lock := func(command, code string) (func(), error) {
+		return commandLock(ctx, p, Options{Command: command, Positionals: []string{code}})
+	}
+	a, e := lock("set", "a")
+	if e != nil {
+		t.Fatal(e)
+	}
+	b, e := lock("remove", "b")
+	if e != nil {
+		t.Fatal(e)
+	}
+	read, e := lock("search", "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	read()
+	for _, command := range []string{"set", "checkout", "setup", "slot"} {
+		timeout, cancel := context.WithTimeout(ctx, 60*time.Millisecond)
+		release, e := commandLock(timeout, p, Options{Command: command, Positionals: []string{"a"}})
+		cancel()
+		if e == nil {
+			release()
+			t.Fatal("conflicting command did not wait", command)
+		}
+	}
+	a()
+	b()
+	checkout, e := lock("checkout", "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	timeout, cancel := context.WithTimeout(ctx, 60*time.Millisecond)
+	defer cancel()
+	if release, e := commandLock(timeout, p, Options{Command: "set", Positionals: []string{"b"}}); e == nil {
+		release()
+		t.Fatal("write passed checkout")
+	}
+	checkout()
+	release, e := lock("set", "a")
+	if e != nil {
+		t.Fatal(e)
+	}
+	release()
+}
+
+func TestConcurrentCookieMergeAndStaleDeletion(t *testing.T) {
+	p := profile(t)
+	u, _ := url.Parse("https://www.willys.se/")
+	a, _ := NewCookieStore(p)
+	b, _ := NewCookieStore(p)
+	a.SetCookies(u, []*http.Cookie{{Name: "first", Value: "a", Path: "/"}})
+	b.SetCookies(u, []*http.Cookie{{Name: "second", Value: "b", Path: "/"}})
+	if e := a.Save(); e != nil {
+		t.Fatal(e)
+	}
+	if e := b.Save(); e != nil {
+		t.Fatal(e)
+	}
+	c, _ := NewCookieStore(p)
+	if len(c.Cookies(u)) != 2 {
+		t.Fatal("lost concurrent cookie")
+	}
+	stale, _ := NewCookieStore(p)
+	c.SetCookies(u, []*http.Cookie{{Name: "first", MaxAge: -1, Path: "/"}})
+	if e := c.Save(); e != nil {
+		t.Fatal(e)
+	}
+	stale.SetCookies(u, []*http.Cookie{{Name: "first", Value: "a", Path: "/"}})
+	if e := stale.Save(); e != nil {
+		t.Fatal(e)
+	}
+	final, _ := NewCookieStore(p)
+	if len(final.Cookies(u)) != 1 || final.Cookies(u)[0].Name != "second" {
+		t.Fatal("stale response restored deleted cookie")
 	}
 }

@@ -15,8 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/gofrs/flock"
 )
 
 var Version = "dev"
@@ -282,18 +280,11 @@ func (a *App) Execute(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	lock := flock.New(filepath.Join(p.Path, "profile.lock"))
-	locked, err := lock.TryLock()
+	release, err := commandLock(ctx, p, o)
 	if err != nil {
 		return err
 	}
-	if !locked {
-		return errors.New("another command is using this profile; wait for it to finish")
-	}
-	defer lock.Close()
-	if err = os.Chmod(filepath.Join(p.Path, "profile.lock"), 0600); err != nil {
-		return err
-	}
+	defer release()
 	result, err := a.Run(ctx, p, o)
 	if err != nil {
 		return err
@@ -337,11 +328,29 @@ func (a *App) Run(ctx context.Context, p *Profile, o Options) (any, error) {
 		}
 		return Object{"profile": o.Profile, "storage": p.Path}, nil
 	}
+	// Establish one shared server session before concurrent requests start.
+	initRelease, err := acquire(ctx, filepath.Join(p.Path, "session-init.lock"), false)
+	if err != nil {
+		return nil, err
+	}
 	connect := a.Connect
 	if connect == nil {
 		connect = NewClient
 	}
 	c, err := connect(p)
+	if err == nil && a.Connect == nil {
+		u, _ := url.Parse(BaseURL)
+		hasCart := false
+		for _, cookie := range c.Cookies.Cookies(u) {
+			if cookie.Name == "willys-cart" {
+				hasCart = true
+			}
+		}
+		if !hasCart {
+			_, err = c.Cart(ctx)
+		}
+	}
+	initRelease()
 	if err != nil {
 		return nil, err
 	}

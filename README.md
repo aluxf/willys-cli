@@ -152,3 +152,24 @@ scripts/release.sh 0.1.0
 ```
 
 Tests use synthetic data. They do not place orders or request live credit authorization.
+
+## Parallel commands
+
+Terminals share the same cart when they use the same profile and storage directory.
+Search, product, store, and cart reads can run together.
+Quantity changes for different product codes can also run together.
+Changes to the same product wait for each other.
+Checkout, setup, and slot commands hold an exclusive profile lock.
+Conflicting commands wait until the lock is available. Press Ctrl+C to cancel a waiting command.
+A cart read during updates can show an intermediate cart state.
+
+```sh
+willys search penne &
+willys search havregryn &
+wait
+```
+
+The CLI initializes a new session once before concurrent requests start.
+Cookie saves merge individual changes under a short file lock.
+Locks coordinate this CLI on one computer. They cannot coordinate browsers or other computers.
+Close older CLI processes before using this version with the same profile.

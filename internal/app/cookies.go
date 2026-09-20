@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,10 +26,12 @@ type savedCookie struct {
 	Cookie http.Cookie `json:"cookie"`
 }
 type CookieStore struct {
-	jar     *cookiejar.Jar
-	records map[string]savedCookie
-	file    string
-	mu      sync.Mutex
+	jar      *cookiejar.Jar
+	records  map[string]savedCookie
+	file     string
+	mu       sync.Mutex
+	dirty    map[string]bool
+	baseline map[string]savedCookie
 }
 
 func cookieKey(origin *url.URL, c http.Cookie) string {
@@ -49,7 +53,7 @@ func defaultCookiePath(u *url.URL) string {
 }
 func NewCookieStore(p *Profile) (*CookieStore, error) {
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
-	store := &CookieStore{jar: jar, records: map[string]savedCookie{}, file: filepath.Join(p.Path, "cookies.json")}
+	store := &CookieStore{jar: jar, records: map[string]savedCookie{}, file: filepath.Join(p.Path, "cookies.json"), dirty: map[string]bool{}, baseline: map[string]savedCookie{}}
 	data, err := os.ReadFile(store.file)
 	if errors.Is(err, os.ErrNotExist) {
 		legacy := filepath.Join(p.Path, "cookies.txt")
@@ -83,10 +87,15 @@ func NewCookieStore(p *Profile) (*CookieStore, error) {
 		r.Cookie.MaxAge = 0
 		store.jar.SetCookies(u, []*http.Cookie{&r.Cookie})
 		store.records[cookieKey(u, r.Cookie)] = r
+		store.baseline[cookieKey(u, r.Cookie)] = r
 	}
 	return store, nil
 }
-func (s *CookieStore) Cookies(u *url.URL) []*http.Cookie { return s.jar.Cookies(u) }
+func (s *CookieStore) Cookies(u *url.URL) []*http.Cookie {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.jar.Cookies(u)
+}
 func (s *CookieStore) SetCookies(u *url.URL, cookies []*http.Cookie) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -97,6 +106,7 @@ func (s *CookieStore) SetCookies(u *url.URL, cookies []*http.Cookie) {
 			c.Path = defaultCookiePath(u)
 		}
 		key := cookieKey(u, c)
+		s.dirty[key] = true
 		if c.MaxAge < 0 || (c.MaxAge == 0 && !c.Expires.IsZero() && !c.Expires.After(time.Now())) {
 			delete(s.records, key)
 			continue
@@ -112,20 +122,77 @@ func (s *CookieStore) SetCookies(u *url.URL, cookies []*http.Cookie) {
 		s.records[key] = savedCookie{origin.String(), c}
 	}
 }
-func (s *CookieStore) Save() error {
+func (s *CookieStore) Save() error                       { return s.syncStorage(context.Background(), true) }
+func (s *CookieStore) Refresh(ctx context.Context) error { return s.syncStorage(ctx, false) }
+func (s *CookieStore) syncStorage(ctx context.Context, save bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	records := []savedCookie{}
-	for _, r := range s.records {
-		if r.Cookie.Expires.IsZero() || r.Cookie.Expires.After(time.Now()) {
-			records = append(records, r)
-		}
-	}
-	data, err := json.Marshal(records)
+	release, err := acquire(ctx, s.file+".lock", false)
 	if err != nil {
 		return err
 	}
-	return atomicWrite(s.file, data)
+	defer release()
+	merged := map[string]savedCookie{}
+	data, err := os.ReadFile(s.file)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err == nil {
+		var records []savedCookie
+		if err = json.Unmarshal(data, &records); err != nil {
+			return err
+		}
+		for _, r := range records {
+			u, e := url.Parse(r.Origin)
+			if e != nil || u.Host == "" {
+				return errors.New("invalid saved cookie origin")
+			}
+			r.Cookie.MaxAge = 0
+			merged[cookieKey(u, r.Cookie)] = r
+		}
+	}
+	if save {
+		for key := range s.dirty {
+			// A stale response must not overwrite a cookie changed by another process.
+			current, currentOK := merged[key]
+			previous, previousOK := s.baseline[key]
+			if currentOK != previousOK || !reflect.DeepEqual(current, previous) {
+				continue
+			}
+			if r, ok := s.records[key]; ok {
+				merged[key] = r
+			} else {
+				delete(merged, key)
+			}
+		}
+	}
+	records := []savedCookie{}
+	for key, r := range merged {
+		if !r.Cookie.Expires.IsZero() && !r.Cookie.Expires.After(time.Now()) {
+			delete(merged, key)
+			continue
+		}
+		records = append(records, r)
+	}
+	if save {
+		data, err = json.Marshal(records)
+		if err != nil {
+			return err
+		}
+		if err = atomicWrite(s.file, data); err != nil {
+			return err
+		}
+	}
+	s.jar, _ = cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
+	s.records = merged
+	s.baseline = map[string]savedCookie{}
+	for key, r := range merged {
+		u, _ := url.Parse(r.Origin)
+		s.jar.SetCookies(u, []*http.Cookie{&r.Cookie})
+		s.baseline[key] = r
+	}
+	s.dirty = map[string]bool{}
+	return nil
 }
 func (s *CookieStore) Import(file string) error {
 	f, err := os.Open(file)

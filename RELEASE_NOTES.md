@@ -1,11 +1,11 @@
-Standalone shopping CLI for Willys Sweden.
+Parallel commands now share a profile safely.
 
-- No Python, Go, or package manager is required on the user's machine.
-- Automatic profiles, persistent cookies, and saved payment links.
-- Product search, cart details, store discovery, delivery setup, and numbered slots.
-- Card payment through a hosted Swedbank Pay page.
-- Experimental Klarna authorization in the default browser.
+- Search, product, store, and cart reads can run together.
+- Different product updates can run together.
+- Updates to the same product wait for each other.
+- Checkout, setup, and slot commands hold an exclusive profile lock.
+- Cookie saves merge changes without replacing another process's session data.
+- Waiting commands support cancellation with Ctrl+C.
 
-Download an executable archive for your operating system and processor.
-The macOS and Linux installer verifies SHA-256 checksums before installation.
-Klarna authorization and payment completion remain unverified live.
+Close older CLI processes before using this version with the same profile.
+Klarna authorization remains experimental. Payment completion remains outside the CLI.
