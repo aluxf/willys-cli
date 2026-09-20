@@ -48,10 +48,19 @@ func (a *App) PaymentStatus(ctx context.Context, c *Client, p *Profile, recover 
 		out["state"] = "not submitted"
 		out["nextAction"] = "Run willys payment recover to archive this unsubmitted attempt."
 	}
+	canceled, providerErr := c.canceledPayment(ctx, saved)
+	if providerErr != nil {
+		out["providerCheckError"] = providerErr.Error()
+	}
+	if canceled {
+		out["state"] = "canceled"
+		out["serverMessage"] = "The provider confirms that payment was canceled."
+		out["nextAction"] = "Run willys payment recover, then checkout to start a new payment."
+	}
 	if !recover {
 		return out, nil
 	}
-	if saved["state"] != "not_submitted" || text(saved["cart"]) == "" || saved["cart"] != cart["code"] || text(cart["orderReference"]) != "" {
+	if (saved["state"] != "not_submitted" && !canceled) || text(saved["cart"]) == "" || saved["cart"] != cart["code"] || text(cart["orderReference"]) != "" {
 		return out, failure("payment_unresolved", "The payment outcome is not verified. Recovery did not clear the attempt. Check the provider or Willys before retrying.", 1, nil)
 	}
 	archive := fmt.Sprintf("payment-archive-%d", time.Now().UnixNano())
@@ -61,5 +70,9 @@ func (a *App) PaymentStatus(ctx context.Context, c *Client, p *Profile, recover 
 	if err = os.Remove(filepath.Join(p.Path, "payment.json")); err != nil {
 		return nil, err
 	}
-	return Object{"state": "recovered", "archive": archive, "message": "The request was never submitted. You can retry checkout."}, nil
+	message := "The request was never submitted. You can retry checkout."
+	if canceled {
+		message = "The provider confirms cancellation. You can start a new payment."
+	}
+	return Object{"state": "recovered", "archive": archive, "message": message}, nil
 }

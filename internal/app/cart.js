@@ -1,4 +1,5 @@
 'use strict';
+let displayedCart = null;
 const $ = id => document.getElementById(id);
 function element(tag, cls, value) { const node = document.createElement(tag); if (cls) node.className = cls; if (value != null) node.textContent = String(value); return node; }
 function httpsURL(raw) { try { const u = new URL(raw); return u.protocol === 'https:' && !u.username && !u.password ? u.href : null; } catch { return null; } }
@@ -29,6 +30,7 @@ function product(p) {
 }
 function sum(label,value,cls='') { const row=element('div',`sum-row ${cls}`); row.append(element('span','',label),element('span','',money(value))); return row; }
 function render(data) {
+ displayedCart=data;
  const products=data.products || [];
  $('caption').textContent=`${products.length} ${products.length===1?'product':'products'} · ${data.totalUnits || 0} items`;
  $('products').replaceChildren(...products.map(product));
@@ -47,6 +49,8 @@ function render(data) {
  disablePayment();
  const payment=httpsURL(data.paymentURL);
  if(payment) { const host=new URL(payment).hostname; if(host==='ecom.payex.com'||host==='payments.klarna.com') { $('payment').href=payment; $('payment').rel='noreferrer'; $('payment').classList.remove('disabled'); $('payment').setAttribute('aria-disabled','false'); } }
+ $('payment').textContent = data.paymentCanceled ? 'Start new payment ↗' : 'Continue to payment ↗';
+ if(data.paymentCanceled) { $('payment').href='#'; $('payment').classList.remove('disabled'); $('payment').setAttribute('aria-disabled','false'); }
  $('payment-note').textContent=data.paymentMessage || '';
  $('error').hidden=data.cartValidation?.passed !== false;
  if(data.cartValidation?.passed===false) $('error').textContent=data.cartValidation.reason;
@@ -60,3 +64,19 @@ async function refresh() {
 }
 $('refresh').addEventListener('click',refresh);
 refresh();
+
+$('payment').addEventListener('click',async event=>{
+ event.preventDefault();
+ if(!displayedCart?.paymentCanceled){
+  await refresh();
+  if(!displayedCart?.paymentCanceled && $('payment').getAttribute('aria-disabled')==='false') window.location.assign($('payment').href);
+  return;
+ }
+ disablePayment();$('refresh').disabled=true;
+ try{
+  const response=await fetch('payment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({total:displayedCart.total,reservation:displayedCart.reservation})});
+  const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not start payment.');
+  const target=httpsURL(result.url);if(!target||!['ecom.payex.com','payments.klarna.com'].includes(new URL(target).hostname))throw new Error('Unsupported payment link.');
+  window.location.assign(target);
+ }catch(error){$('error').hidden=false;$('error').textContent=error.message;$('payment-note').textContent='Refresh to check payment status. Do not retry an uncertain payment.';$('refresh').disabled=false;}
+});

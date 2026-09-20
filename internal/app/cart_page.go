@@ -45,6 +45,24 @@ func (a *App) cartPageData(ctx context.Context, p *Profile, profile string) (Obj
 	if saved != nil {
 		view["paymentMessage"] = "A payment attempt is saved. Check willys payment status before continuing."
 		if text(saved["cart"]) != "" && saved["cart"] == view["code"] {
+			connect := a.Connect
+			if connect == nil {
+				connect = NewClient
+			}
+			client, err := connect(p)
+			if err != nil {
+				return nil, err
+			}
+			canceled, err := client.canceledPayment(ctx, saved)
+			if err != nil {
+				view["paymentMessage"] = "Cannot verify payment status. Try refreshing before continuing."
+				return view, nil
+			}
+			if canceled {
+				view["paymentCanceled"] = true
+				view["paymentMessage"] = "Your previous payment was canceled. Start a new payment to continue."
+				return view, nil
+			}
 			if target, err := PaymentURL(text(saved["location"])); err == nil {
 				view["paymentURL"] = target
 				view["paymentMessage"] = "Complete payment with Swedbank Pay or Klarna. Opening this link does not confirm an order."
@@ -54,7 +72,7 @@ func (a *App) cartPageData(ctx context.Context, p *Profile, profile string) (Obj
 	return view, nil
 }
 
-func cartPageHandler(host, route string, load func(context.Context) (Object, error)) http.Handler {
+func cartPageHandler(host, route string, load func(context.Context) (Object, error), restart ...func(context.Context, Object) (Object, error)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
@@ -63,6 +81,28 @@ func cartPageHandler(host, route string, load func(context.Context) (Object, err
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src https:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
 		if r.Host != host || (r.Header.Get("Origin") != "" && r.Header.Get("Origin") != "http://"+host) || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		if r.URL.Path == route+"/payment" && r.Method == http.MethodPost && len(restart) > 0 {
+			if r.Header.Get("Origin") != "http://"+host {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, 4096)
+			defer r.Body.Close()
+			var body Object
+			if json.NewDecoder(r.Body).Decode(&body) != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+			data, err := restart[0](r.Context(), body)
+			w.Header().Set("Content-Type", "application/json")
+			if err != nil {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(Object{"error": err.Error()})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(data)
 			return
 		}
 		if r.Method != http.MethodGet {
@@ -111,7 +151,7 @@ func (a *App) ServeCartPage(ctx context.Context, p *Profile, profile string) err
 	defer listener.Close()
 	route := "/" + hex.EncodeToString(nonce)
 	host := listener.Addr().String()
-	server := &http.Server{Handler: cartPageHandler(host, route, func(ctx context.Context) (Object, error) { return a.cartPageData(ctx, p, profile) }), ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 100 * time.Second, IdleTimeout: 30 * time.Second}
+	server := &http.Server{Handler: cartPageHandler(host, route, func(ctx context.Context) (Object, error) { return a.cartPageData(ctx, p, profile) }, func(ctx context.Context, body Object) (Object, error) { return a.restartCanceledPayment(ctx, p, body) }), ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 100 * time.Second, IdleTimeout: 30 * time.Second}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	defer server.Close()
@@ -134,4 +174,49 @@ func (a *App) ServeCartPage(ctx context.Context, p *Profile, profile string) err
 		}
 		return err
 	}
+}
+
+func (a *App) restartCanceledPayment(ctx context.Context, p *Profile, body Object) (Object, error) {
+	release, err := commandLock(ctx, p, Options{Command: "checkout"})
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	connect := a.Connect
+	if connect == nil {
+		connect = NewClient
+	}
+	c, err := connect(p)
+	if err != nil {
+		return nil, err
+	}
+	saved, err := p.Load("payment")
+	if err != nil {
+		return nil, err
+	}
+	canceled, err := c.canceledPayment(ctx, saved)
+	if err != nil {
+		return nil, err
+	}
+	if !canceled {
+		return nil, errors.New("the previous payment is not confirmed canceled; no new payment was started")
+	}
+	cart, err := c.Cart(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if text(body["total"]) == "" || body["total"] != cart["totalPrice"] || body["reservation"] != cart["reservedAmount"] {
+		return nil, errors.New("cart totals changed; refresh before starting a new payment")
+	}
+	if err := validateCart(cart); err != nil {
+		return nil, err
+	}
+	if text(saved["method"]) != "card" {
+		return nil, errors.New("restart this payment through the CLI")
+	}
+	if _, err := a.PaymentStatus(ctx, c, p, true); err != nil {
+		return nil, err
+	}
+	result, err := a.Checkout(ctx, c, p, Options{Values: map[string]string{"method": "card", "expected-total": text(body["total"]), "expected-reservation": text(body["reservation"])}, Bools: map[string]bool{"yes": true, "no-open": true}})
+	return obj(result), err
 }

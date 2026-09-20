@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/aluxf/willys-cli/main/install.sh | 
 The installer downloads a standalone binary and verifies its SHA-256 checksum.
 You do not need Python, Go, or a package manager.
 It installs into `~/.local/bin`. Follow the printed PATH instruction if needed.
-The installer defaults to the reviewed beta, `v0.2.0-beta.4`.
+The installer defaults to the reviewed beta, `v0.2.0-beta.5`.
 Set `WILLYS_INSTALL_DIR` to choose another directory, or `WILLYS_VERSION` to select a release.
 Run the installer again to update.
 
@@ -221,6 +221,8 @@ Unix runners also check the curl installer. Current releases publish as prerelea
 Run `willys cart --open` to open a minimal browser review. Use the same `--profile` as your cart.
 The page shows product images, quantities, prices, ingredients, pickup or delivery details, and payment totals.
 Refresh reads current data through the CLI session. The browser does not receive Willys cookies.
-A saved payment link enables **Continue to payment**. The review never submits an order.
+A saved payment link enables **Continue to payment**. A verified cancellation enables **Start new payment**. The review can start a new card payment only after the provider confirms that the previous payment was canceled.
 If no link exists, run `willys checkout --no-open` in another terminal, then refresh the page.
 Keep the review command running. Ctrl+C stops its local server, which also closes after one hour.
+
+Payment recovery also archives card attempts that Swedbank Pay explicitly confirms as canceled. Unknown outcomes remain protected.

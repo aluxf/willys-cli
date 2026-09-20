@@ -37,7 +37,7 @@ Commands:
   checkout                                 Choose a payment method and start payment
   payment [--url]                           Reopen or print the saved payment link
   payment status                           Inspect the saved attempt and current cart
-  payment recover                          Recover only a proven unsubmitted attempt
+  payment recover                          Recover a verified canceled or unsubmitted attempt
   session [--import-cookies FILE]           Show storage or import into a new profile
   version                                  Show the installed version
 
@@ -69,7 +69,7 @@ Usage notes:
   product CODE is optional; use it only when more information is needed.
   cart --open serves a live browser review. Keep the command running; Ctrl+C closes the local server.
   The review reopens a saved payment link. Use checkout --no-open, then refresh the review.
-  It uses the selected profile and closes after one hour. It never submits an order.
+  It uses the selected profile and closes after one hour. A verified canceled card payment can be restarted from the page.
   Swedish catalog terms work best. --details adds images, ingredients, and nutrition to products.
   Use the same profile throughout an order. Default terminals share the same saved cart.
   Different-product updates can run together. Conflicting commands wait automatically.
@@ -610,6 +610,25 @@ func (a *App) OpenSavedPayment(p *Profile, o Options) (any, error) {
 	u, e := PaymentURL(text(saved["location"]))
 	if e != nil {
 		return nil, errors.New("saved payment has no supported URL; resolve the attempt before retrying")
+	}
+	connect := a.Connect
+	if connect == nil {
+		connect = NewClient
+	}
+	client, err := connect(p)
+	if err != nil {
+		return nil, err
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	canceled, err := client.canceledPayment(ctx, saved)
+	if err != nil {
+		return nil, err
+	}
+	if canceled {
+		return nil, errors.New("this payment was canceled; run willys payment recover, then checkout to start a new payment")
 	}
 	if !o.Bools["url"] {
 		if e = a.Open(u); e != nil {

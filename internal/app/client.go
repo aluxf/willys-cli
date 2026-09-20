@@ -21,6 +21,7 @@ type Response struct {
 	Body     string `json:"body"`
 }
 type Client struct {
+	ProviderHTTP   *http.Client
 	OrderSubmitted bool
 	Base           string
 	HTTP           *http.Client
