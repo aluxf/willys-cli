@@ -192,5 +192,23 @@ func (c *Client) CartView(ctx context.Context, full bool) (Object, error) {
 		}
 		products = append(products, ProductView(p, d, full))
 	}
-	return Object{"code": cart["code"], "totalUnits": cart["totalUnitCount"], "total": cart["totalPrice"], "reservation": cart["reservedAmount"], "buffer": cart["bufferedAmount"], "deliveryFee": cart["serviceCost"], "slot": cart["slotFormattedDate"], "products": products}, nil
+	readiness := Object{"passed": true}
+	if err := validateCart(cart); err != nil {
+		readiness["passed"] = false
+		readiness["reason"] = err.Error()
+	}
+	view := Object{"fulfillment": cart["deliveryModeCode"], "cartValidation": readiness, "code": cart["code"], "totalUnits": cart["totalUnitCount"], "total": cart["totalPrice"], "reservation": cart["reservedAmount"], "buffer": cart["bufferedAmount"], "deliveryFee": cart["serviceCost"], "slot": cart["slotFormattedDate"], "products": products}
+	if full {
+		view["address"] = cart["deliveryAddress"]
+		view["slotReservedUntil"] = cart["slotReservedTo"]
+		view["subtotal"] = cart["subTotalPriceWithDiscountsAndVouchers"]
+		if isPickup(text(cart["deliveryModeCode"])) {
+			store, err := c.Get(ctx, "/store/active", nil)
+			if err != nil {
+				return nil, fmt.Errorf("cannot load pickup store: %w", err)
+			}
+			view["store"] = store
+		}
+	}
+	return view, nil
 }

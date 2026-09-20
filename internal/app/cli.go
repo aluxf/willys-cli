@@ -26,7 +26,7 @@ Usage: willys [--profile NAME] [--json] COMMAND [OPTIONS]
 Commands:
   search "TERM, TERM" [--page N] [--limit N]  Search products; limit applies per term
   product CODE [--details]                  Show brand, size, price, and product link
-  cart [--details]                          Show products, total, and reservation
+  cart [--details] [--open]                 Show the cart or open its browser review
   cart reset                               Empty the cart with one bulk request
   set CODE QUANTITY [--unit pieces|kilogram] Set the final quantity; never increments
   remove CODE [--unit pieces|kilogram]       Remove one product
@@ -45,6 +45,7 @@ Setup flags (omit them for interactive prompts):
   --first-name NAME --last-name NAME --phone NUMBER --email EMAIL
   --mode delivery --street ADDRESS --postcode CODE --town TOWN
   --mode pickup --store STORE_ID
+  Both modes require --street, --postcode, and --town (or interactive input).
 
 Checkout flags:
   --method card|klarna   Select the user's chosen method; omit to ask
@@ -66,6 +67,9 @@ Example workflow:
 Usage notes:
   Search returns brand, pack size, price, and code. Verify the match, then use set directly.
   product CODE is optional; use it only when more information is needed.
+  cart --open serves a live browser review. Keep the command running; Ctrl+C closes the local server.
+  The review reopens a saved payment link. Use checkout --no-open, then refresh the review.
+  It uses the selected profile and closes after one hour. It never submits an order.
   Swedish catalog terms work best. --details adds images, ingredients, and nutrition to products.
   Use the same profile throughout an order. Default terminals share the same saved cart.
   Different-product updates can run together. Conflicting commands wait automatically.
@@ -82,7 +86,7 @@ Global options:
 `
 
 var commandOptions = map[string]map[string]bool{
-	"search": {"page": false, "limit": false}, "product": {"details": true}, "cart": {"details": true},
+	"search": {"page": false, "limit": false}, "product": {"details": true}, "cart": {"details": true, "open": true},
 	"set": {"unit": false}, "remove": {"unit": false}, "stores": {"pickup": true, "all": true, "details": true},
 	"setup": {"first-name": false, "last-name": false, "phone": false, "email": false, "street": false, "postcode": false, "town": false, "store": false, "mode": false},
 	"slots": {"choose": true}, "slot": {}, "checkout": {"method": false, "no-open": true, "yes": true, "expected-total": false, "expected-reservation": false, "experimental-klarna": true},
@@ -344,6 +348,15 @@ func (a *App) Execute(ctx context.Context, args []string) error {
 	p, err := NewProfile(root, o.Profile)
 	if err != nil {
 		return err
+	}
+	if o.Command == "cart" && o.Bools["open"] {
+		if err := o.Arity(0, 0); err != nil {
+			return err
+		}
+		if o.JSON {
+			return errors.New("--open cannot be combined with --json")
+		}
+		return a.ServeCartPage(ctx, p, o.Profile)
 	}
 	release, err := commandLock(ctx, p, o)
 	if err != nil {

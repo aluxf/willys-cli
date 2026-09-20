@@ -45,7 +45,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 func sampleCart() Object {
-	return Object{"code": "cart-test", "products": []any{Object{"code": "123_ST", "name": "Pasta", "pickQuantity": float64(2), "manufacturer": "Example", "displayVolume": "500g", "price": "10,00 kr", "replacement": true}}, "totalPrice": "100,00 kr", "reservedAmount": "110,00 kr", "bufferedAmount": "10,00 kr", "slotCode": "slot-test", "deliveryModeCode": "homeDelivery", "deliveryAddress": Object{"line1": "Example 1", "postalCode": "11111"}}
+	return Object{"code": "cart-test", "products": []any{Object{"code": "123_ST", "name": "Pasta", "pickQuantity": float64(2), "manufacturer": "Example", "displayVolume": "500g", "price": "10,00 kr", "replacement": true}}, "totalPrice": "100,00 kr", "reservedAmount": "110,00 kr", "bufferedAmount": "10,00 kr", "slotCode": "slot-test", "deliveryModeCode": "homeDelivery", "deliveryAddress": Object{"line1": "Example 1", "postalCode": "11111", "town": "Stockholm", "firstName": "Test", "lastName": "Shopper", "email": "shopper@example.com", "cellphone": "0700000000"}}
 }
 func checkoutOptions() Options {
 	return Options{Values: map[string]string{"method": "card", "expected-total": "100,00 kr", "expected-reservation": "110,00 kr"}, Bools: map[string]bool{"yes": true, "no-open": true}}
@@ -614,7 +614,8 @@ func TestCLISetupSlotsAndPaymentAcrossInvocations(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&address); err != nil {
 				t.Error(err)
 			}
-			cart["deliveryAddress"] = Object{"line1": address["addressLine1"], "postalCode": address["postalCode"], "town": address["town"]}
+			address["line1"] = address["addressLine1"]
+			cart["deliveryAddress"] = address
 			writeJSON(w, Object{})
 		case "/slot/homeDelivery":
 			if r.URL.Query().Get("postalCode") != "11111" {

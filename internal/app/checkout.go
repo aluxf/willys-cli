@@ -121,29 +121,31 @@ func (a *App) Setup(ctx context.Context, c *Client, p *Profile, o Options) (any,
 			return nil, err
 		}
 	}
-	var address Object
-	storeID := ""
-	switch mode {
-	case "delivery":
-		prior, e := p.Load("address")
+	if mode != "delivery" && mode != "pickup" {
+		return nil, errors.New("mode must be delivery or pickup")
+	}
+	prior, e := p.Load("address")
+	if e != nil {
+		return nil, e
+	}
+	address := clone(fields)
+	for _, f := range []struct {
+		key, saved, label string
+		normalize         func(string) (string, error)
+	}{
+		{"street", "addressLine1", "Street address", normalizeText},
+		{"postcode", "postalCode", "Postcode", normalizePostcode},
+		{"town", "town", "Town", normalizeText},
+	} {
+		v, e := a.setupField(o, f.key, f.label, prior[f.saved], f.normalize)
 		if e != nil {
 			return nil, e
 		}
-		address = clone(fields)
-		for _, f := range []struct {
-			key, saved, label string
-			normalize         func(string) (string, error)
-		}{
-			{"street", "addressLine1", "Street address", normalizeText},
-			{"postcode", "postalCode", "Postcode", normalizePostcode},
-			{"town", "town", "Town", normalizeText},
-		} {
-			v, e := a.setupField(o, f.key, f.label, prior[f.saved], f.normalize)
-			if e != nil {
-				return nil, e
-			}
-			address[f.saved] = v
-		}
+		address[f.saved] = v
+	}
+	storeID := ""
+	switch mode {
+	case "delivery":
 	case "pickup":
 		value, e := c.Get(ctx, "/store", url.Values{"clickAndCollect": {"true"}})
 		if e != nil {
@@ -186,12 +188,6 @@ func (a *App) Setup(ctx context.Context, c *Client, p *Profile, o Options) (any,
 		if _, err = c.Post(ctx, "/cart/delivery-mode/homeDelivery", nil, nil); err != nil {
 			return nil, fmt.Errorf("contact details and postcode are saved; setup did not confirm home delivery: %w", err)
 		}
-		if _, err = c.Post(ctx, "/cart/delivery-address", nil, address); err != nil {
-			return nil, fmt.Errorf("contact details, postcode, and home delivery are saved; setup did not confirm the address: %w", err)
-		}
-		if err = p.Save("address", address); err != nil {
-			return nil, fmt.Errorf("delivery address is saved in the cart but not in this profile: %w", err)
-		}
 	} else {
 		if _, err = c.Post(ctx, "/store/activate", url.Values{"storeId": {storeID}, "activelySelected": {"true"}, "forceAsPickingStore": {"true"}}, nil); err != nil {
 			return nil, fmt.Errorf("contact details are saved; setup did not confirm pickup-store activation: %w", err)
@@ -200,12 +196,21 @@ func (a *App) Setup(ctx context.Context, c *Client, p *Profile, o Options) (any,
 			return nil, fmt.Errorf("contact details and pickup-store activation are saved; setup did not confirm pickup mode: %w", err)
 		}
 	}
+	if _, err = c.Post(ctx, "/cart/delivery-address", nil, address); err != nil {
+		return nil, fmt.Errorf("fulfillment is saved; setup did not confirm the address: %w", err)
+	}
+	if err = p.Save("address", address); err != nil {
+		return nil, fmt.Errorf("delivery address is saved in the cart but not in this profile: %w", err)
+	}
 	after, err := c.Cart(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("setup changed fulfillment but could not verify it; check the cart: %w", err)
 	}
-	if mode == "delivery" && (text(after["deliveryModeCode"]) != "homeDelivery" || !sameAddress(obj(after["deliveryAddress"]), address)) {
+	if !sameAddress(obj(after["deliveryAddress"]), address) || (mode == "delivery" && text(after["deliveryModeCode"]) != "homeDelivery") {
 		return nil, errors.New("delivery setup differs from the requested address; check the cart")
+	}
+	if err = validateCustomerAddress(obj(after["deliveryAddress"])); err != nil {
+		return nil, fmt.Errorf("setup could not verify customer details: %w", err)
 	}
 	if mode == "pickup" {
 		if !isPickup(text(after["deliveryModeCode"])) {
@@ -358,14 +363,39 @@ func Fingerprint(cart Object) string {
 	return string(b)
 }
 func validateCart(cart Object) error {
+	if strings.TrimSpace(text(cart["code"])) == "" {
+		return errors.New("cannot identify the cart; run willys cart before checkout")
+	}
 	if len(list(cart["products"])) == 0 || text(cart["slotCode"]) == "" {
 		return errors.New("add products and select a slot before checkout")
 	}
 	if text(cart["orderReference"]) != "" {
 		return errors.New("editing existing orders is not supported")
 	}
-	if text(cart["deliveryModeCode"]) == "homeDelivery" && text(obj(cart["deliveryAddress"])["line1"]) == "" {
-		return errors.New("run willys setup to save the delivery address")
+	mode := text(cart["deliveryModeCode"])
+	if mode != "homeDelivery" && !isPickup(mode) {
+		return errors.New("run willys setup to select delivery or pickup")
+	}
+	return validateCustomerAddress(obj(cart["deliveryAddress"]))
+}
+
+func validateCustomerAddress(address Object) error {
+	if strings.TrimSpace(text(first(address["line1"], address["addressLine1"]))) == "" || strings.TrimSpace(text(address["town"])) == "" {
+		return errors.New("run willys setup to save a complete customer address; pickup also requires an address")
+	}
+	if _, err := normalizePostcode(text(first(address["postalCode"], address["postcode"]))); err != nil {
+		return errors.New("run willys setup to save a valid address postcode")
+	}
+	for _, key := range []string{"firstName", "lastName"} {
+		if strings.TrimSpace(text(address[key])) == "" {
+			return errors.New("run willys setup to save customer contact details")
+		}
+	}
+	if _, err := normalizeEmail(text(address["email"])); err != nil {
+		return errors.New("run willys setup to save a valid contact email")
+	}
+	if _, err := normalizePhone(text(address["cellphone"])); err != nil {
+		return errors.New("run willys setup to save a valid contact mobile number")
 	}
 	return nil
 }
@@ -476,6 +506,9 @@ func (a *App) Checkout(ctx context.Context, c *Client, p *Profile, o Options) (a
 	if Fingerprint(current) != expected {
 		return nil, errors.New("the cart changed during checkout; review it before continuing")
 	}
+	if err = validateCart(current); err != nil {
+		return nil, err
+	}
 	if err = c.checkStock(ctx, current); err != nil {
 		return nil, err
 	}
@@ -503,7 +536,7 @@ func (a *App) Checkout(ctx context.Context, c *Client, p *Profile, o Options) (a
 		return nil, err
 	}
 	if response.Location == "" {
-		return nil, fmt.Errorf("payment returned no URL (HTTP %d); the attempt remains saved", response.Status)
+		return nil, fmt.Errorf("checkout returned HTTP %d: %s; no payment URL was returned; run willys payment status", response.Status, paymentResponseMessage(attempt))
 	}
 	target, err := PaymentURL(response.Location)
 	if err != nil {

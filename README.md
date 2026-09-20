@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/aluxf/willys-cli/main/install.sh | 
 The installer downloads a standalone binary and verifies its SHA-256 checksum.
 You do not need Python, Go, or a package manager.
 It installs into `~/.local/bin`. Follow the printed PATH instruction if needed.
-The installer defaults to the reviewed beta, `v0.2.0-beta.3`.
+The installer defaults to the reviewed beta, `v0.2.0-beta.4`.
 Set `WILLYS_INSTALL_DIR` to choose another directory, or `WILLYS_VERSION` to select a release.
 Run the installer again to update.
 
@@ -78,11 +78,11 @@ It does not calculate the nearest store. `--all` includes unnamed API records.
 The inspected endpoint returned 257 records: 256 named stores, including 182 with pickup support.
 These counts are a snapshot from 20 September 2026.
 
-`setup` prompts for contact details, fulfillment method, and address or pickup store.
+`setup` prompts for contact details, fulfillment method, and customer address. Pickup also requires a store and customer address.
 It remembers your inputs for the next setup. You do not need to create JSON files.
 Press Ctrl+C or type `/cancel` to cancel a prompt.
 Invalid interactive fields prompt for correction. Invalid flags fail without prompting.
-Setup verifies the returned delivery address or pickup store before reporting success.
+Setup verifies the returned customer address and contact fields before reporting success. Pickup also verifies the active store.
 A failure during saving identifies the affected step. Earlier server changes can remain saved.
 Use flags such as `--first-name`, `--last-name`, `--phone`, `--email`, `--mode`, `--street`, `--postcode`, and `--town` for scripts.
 For pickup, use `--mode pickup --store STORE_ID`.
@@ -215,3 +215,12 @@ Exit status is 0 for success, 1 for failure, 2 for parsing errors, 3 for partial
 Release publication waits for Linux, macOS, and Windows checks on the tagged commit.
 These checks include race tests, vet, vulnerability scanning, and executable builds.
 Unix runners also check the curl installer. Current releases publish as prereleases.
+
+### Browser cart review
+
+Run `willys cart --open` to open a minimal browser review. Use the same `--profile` as your cart.
+The page shows product images, quantities, prices, ingredients, pickup or delivery details, and payment totals.
+Refresh reads current data through the CLI session. The browser does not receive Willys cookies.
+A saved payment link enables **Continue to payment**. The review never submits an order.
+If no link exists, run `willys checkout --no-open` in another terminal, then refresh the page.
+Keep the review command running. Ctrl+C stops its local server, which also closes after one hour.

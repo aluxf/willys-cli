@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>Your cart · Willys CLI</title><link rel="stylesheet" href="cart.css"><script src="cart.js" defer></script></head>
+<body>
+<main>
+ <p id="error" class="notice" role="alert" hidden></p>
+ <div class="layout" aria-busy="true" id="layout">
+  <div class="overview">
+   <section class="fulfillment" aria-label="Pickup or delivery details"><p class="eyebrow" id="fulfillment-label">Your order</p><h1 id="store">Checking details…</h1><p id="address" class="muted"></p><p id="slot"></p><p id="customer" class="fine"></p></section>
+   <section class="summary" aria-label="Order summary"><p class="eyebrow">Order summary</p><div id="totals"></div><a id="payment" class="primary disabled" aria-disabled="true">Continue to payment <span aria-hidden="true">↗</span></a><p id="payment-note" class="fine">Loading payment details…</p></section>
+  </div>
+  <section aria-label="Products" class="catalog">
+   <div class="heading"><div><h2>Your groceries</h2><p id="caption" class="muted">Loading your groceries…</p></div><button id="refresh" type="button">Refresh <span aria-hidden="true">↻</span></button></div>
+   <div id="products" class="products"><p class="loading">Getting your cart from Willys…</p></div>
+  </section>
+ </div>
+ <footer><span>Willys CLI · Independent cart review</span><span id="updated" aria-live="polite"></span></footer>
+</main>
+</body></html>

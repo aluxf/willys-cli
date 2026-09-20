@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -36,7 +37,7 @@ func TestSetupDeliveryVerifiesNormalizedAddress(t *testing.T) {
 			cart["deliveryModeCode"] = "homeDelivery"
 			writeJSON(w, Object{})
 		case "/cart/delivery-address":
-			cart["deliveryAddress"] = Object{"line1": "Example 1", "postalCode": "11111", "town": "STOCKHOLM"}
+			cart["deliveryAddress"] = obj(sampleCart()["deliveryAddress"])
 			writeJSON(w, Object{})
 		default:
 			t.Fatalf("unexpected request %s", r.URL.Path)
@@ -75,9 +76,11 @@ func TestSetupPickupVerifiesActiveStore(t *testing.T) {
 	}{
 		{"success", "store-one", false},
 		{"mismatch", "store-two", true},
+		{"missing-address", "store-one", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			p := profile(t)
+			address := Object{}
 			c, _ := clientFor(t, p, func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/csrf-token":
@@ -85,7 +88,20 @@ func TestSetupPickupVerifiesActiveStore(t *testing.T) {
 				case "/store":
 					writeJSON(w, []any{Object{"storeId": "store-one", "name": "Store one", "clickAndCollect": true}})
 				case "/cart":
-					writeJSON(w, Object{"deliveryModeCode": "pickUpInStore"})
+					writeJSON(w, Object{"deliveryModeCode": "pickUpInStore", "deliveryAddress": address})
+				case "/cart/delivery-address":
+					var payload Object
+					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+						t.Error(err)
+					}
+					if payload["addressLine1"] != "Example 1" || payload["email"] != "shopper@example.com" {
+						t.Errorf("incomplete customer address: %v", payload)
+					}
+					if test.name != "missing-address" {
+						address = payload
+						address["line1"] = payload["addressLine1"]
+					}
+					writeJSON(w, Object{})
 				case "/store/activate", "/cart/customer-contact-info", "/cart/delivery-mode/pickUpInStore":
 					writeJSON(w, Object{})
 				case "/store/active":
@@ -98,7 +114,7 @@ func TestSetupPickupVerifiesActiveStore(t *testing.T) {
 			o.Values["store"] = "store-one"
 			_, err := setupApp().Setup(context.Background(), c, p, o)
 			if test.wantError {
-				if err == nil || !strings.Contains(err.Error(), "different store") {
+				if err == nil || (test.name == "mismatch" && !strings.Contains(err.Error(), "different store")) {
 					t.Fatal(err)
 				}
 				return
