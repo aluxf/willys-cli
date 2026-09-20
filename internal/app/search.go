@@ -16,7 +16,7 @@ func searchOne(ctx context.Context, c *Client, query string, page, limit int) ([
 	}
 	out := []any{}
 	for _, raw := range list(obj(v)["results"]) {
-		out = append(out, ProductView(obj(raw), nil, false))
+		out = append(out, catalogProductView(obj(raw), false))
 	}
 	return out, nil
 }

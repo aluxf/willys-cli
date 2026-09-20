@@ -1,10 +1,11 @@
-Sign in with BankID, search online deals, and review your cart in the browser.
+Sign in with BankID, browse online deals, and review your cart in the browser.
 
 - Run `willys auth` to inspect account and cart setup status.
 - Run `willys auth login` to sign in with BankID. Sessions persist in the selected profile.
 - Saved contact and address fields prefill setup. Fulfillment and slot selection remain separate.
-- Run `willys deals "pasta, ost"` to search online offers with prices, conditions, expiry, and product links.
-- Deal search checks all offer pages before filtering. `--page` starts at zero; `--limit` applies per term.
+- Normal product search shows available offers, including conditions, membership requirements, expiry, and product links.
+- Run `willys deals` to browse online offers. Deal search terms are no longer accepted.
+- Deals fetch only the requested page. `--page` starts at zero; `--limit` defaults to 20.
 - Use `--store ID` for a temporary guest preview. Your cart and login remain unchanged.
 - Use `--details` for product images and full promotion data. Targeted personal offers remain excluded.
 - Run `willys cart --open` for product images, quantities, ingredients, fulfillment details, and payment totals.

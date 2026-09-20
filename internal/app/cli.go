@@ -25,8 +25,8 @@ Usage: willys [--profile NAME] [--json] COMMAND [OPTIONS]
 
 Commands:
   search "TERM, TERM" [--page N] [--limit N]  Search products; limit applies per term
-  deals ["TERM, TERM"] [--store ID] [--page N] [--limit N] [--details]
-                                           Browse or search online offers
+  deals [--store ID] [--page N] [--limit N] [--details]
+                                           Browse online offers
   product CODE [--details]                  Show brand, size, price, and product link
   cart [--details] [--open]                 Show the cart or open its browser review
   cart reset                               Empty the cart with one bulk request
@@ -69,12 +69,12 @@ Example workflow:
   willys checkout
 
 Usage notes:
-  Search returns brand, pack size, price, and code. Verify the match, then use set directly.
+  Search returns brand, pack size, price, code, and any offer conditions. Verify the match, then use set directly.
   product CODE is optional; use it only when more information is needed.
   cart --open serves a live browser review. Keep the command running; Ctrl+C closes the local server.
   The review reopens a saved payment link. Use checkout --no-open, then refresh the review.
   It uses the selected profile and closes after one hour. A verified canceled card payment can be restarted from the page.
-  deals searches all online offer pages locally; --page is zero-based and --limit applies per term.
+  deals browses one online offer page per request. --page starts at zero; --limit defaults to 20.
   Deals use the active store. --store previews another store in a temporary guest session.
   Offer prices require the displayed conditions. Targeted personal offers are not included.
   Swedish catalog terms work best. --details adds images, ingredients, and nutrition to products.
@@ -303,9 +303,6 @@ func Emit(w io.Writer, value any, raw bool) error {
 				fmt.Fprintf(w, "Error: %s\n\n", message)
 				return nil
 			}
-			if total, ok := v["totalMatches"]; ok {
-				fmt.Fprintf(w, "Matches: %v; page: %v; more: %v\n", total, v["page"], v["hasMore"])
-			}
 			return Emit(w, v["products"], false)
 		}
 		keys := []string{}
@@ -486,7 +483,7 @@ func (a *App) Run(ctx context.Context, p *Profile, o Options) (any, error) {
 		if e != nil {
 			return nil, e
 		}
-		return ProductView(d, nil, o.Bools["details"]), nil
+		return catalogProductView(d, o.Bools["details"]), nil
 	case "cart":
 		if len(o.Positionals) == 1 && o.Positionals[0] == "reset" {
 			return a.ResetCart(ctx, c, p)

@@ -9,8 +9,6 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"strings"
-	"time"
 )
 
 var dealStoreID = regexp.MustCompile(`^[0-9]+$`)
@@ -73,89 +71,56 @@ func paginationInt(p Object, key string) (int, error) {
 	return int(n), nil
 }
 
-func fetchDeals(ctx context.Context, c *Client, storeID string) ([]any, error) {
-	products := []any{}
+func fetchDealPage(ctx context.Context, c *Client, storeID string, page, limit int) (Object, error) {
+	value, err := c.Get(ctx, "/search/campaigns/online", url.Values{"q": {storeID}, "type": {"PERSONAL_GENERAL"}, "page": {strconv.Itoa(page)}, "size": {strconv.Itoa(limit)}})
+	if err != nil {
+		return nil, fmt.Errorf("cannot load online offers page %d: %w", page, err)
+	}
+	data := obj(value)
+	pagination := obj(data["pagination"])
+	current, err := paginationInt(pagination, "currentPage")
+	if err != nil {
+		return nil, err
+	}
+	pages, err := paginationInt(pagination, "numberOfPages")
+	if err != nil {
+		return nil, err
+	}
+	total, err := paginationInt(pagination, "totalNumberOfResults")
+	if err != nil {
+		return nil, err
+	}
+	size, err := paginationInt(pagination, "pageSize")
+	if err != nil {
+		return nil, err
+	}
+	// Willys reports an extra page when the total is divisible by the page size.
+	actualPages := (total + limit - 1) / limit
+	if current != page || size != limit || pages < actualPages || pages > total/limit+1 {
+		return nil, errors.New("online offers returned inconsistent pagination; run deals again")
+	}
+	expected := 0
+	if page <= total/limit {
+		expected = min(limit, total-page*limit)
+	}
+	rows, ok := data["results"].([]any)
+	if !ok || len(rows) != expected {
+		return nil, errors.New("online offers returned an incomplete page; run deals again")
+	}
 	seen := map[string]bool{}
-	pages, total := 1, -1
-	for page := 0; page < pages; page++ {
-		value, err := c.Get(ctx, "/search/campaigns/online", url.Values{"q": {storeID}, "type": {"PERSONAL_GENERAL"}, "page": {strconv.Itoa(page)}, "size": {"100"}})
-		if err != nil {
-			return nil, fmt.Errorf("cannot load online offers page %d: %w", page, err)
+	for _, row := range rows {
+		code := text(obj(row)["code"])
+		if code == "" || seen[code] {
+			return nil, errors.New("online offers returned missing or duplicate product codes; run deals again")
 		}
-		data := obj(value)
-		pagination := obj(data["pagination"])
-		current, err := paginationInt(pagination, "currentPage")
-		if err != nil {
-			return nil, err
-		}
-		count, err := paginationInt(pagination, "numberOfPages")
-		if err != nil {
-			return nil, err
-		}
-		hits, err := paginationInt(pagination, "totalNumberOfResults")
-		if err != nil {
-			return nil, err
-		}
-		if current != page || (page > 0 && (count != pages || hits != total)) {
-			return nil, errors.New("online offers changed during pagination; run deals again")
-		}
-		if page == 0 {
-			pages, total = count, hits
-		}
-		rows, ok := data["results"].([]any)
-		if !ok || (len(rows) == 0 && hits > 0) || (hits > 0 && (count == 0 || count > hits)) || (hits == 0 && count > 1) {
-			return nil, errors.New("online offers returned incomplete pagination")
-		}
-		for _, row := range rows {
-			code := text(obj(row)["code"])
-			if code == "" || seen[code] {
-				return nil, errors.New("online offers returned missing or duplicate product codes; run deals again")
-			}
-			seen[code] = true
-			products = append(products, row)
-		}
+		seen[code] = true
 	}
-	if len(products) != total {
-		return nil, errors.New("online offers returned an incomplete catalog; run deals again")
-	}
-	return products, nil
-}
-
-func dealView(product Object, details bool) Object {
-	view := ProductView(product, nil, details)
-	view["regularPrice"] = product["price"]
-	delete(view, "price")
-	if text(view["url"]) == "" {
-		slug := strings.ReplaceAll(text(product["name"]), " ", "-") + "-" + text(product["code"])
-		view["url"] = "https://www.willys.se/produkt/" + url.PathEscape(slug)
-	}
-	promotions := []any{}
-	for _, raw := range list(product["potentialPromotions"]) {
-		p := obj(raw)
-		var member any
-		switch text(p["campaignType"]) {
-		case "LOYALTY":
-			member = true
-		case "GENERAL":
-			member = false
-		}
-		var expires any
-		if timestamp := number(p["validUntil"]); timestamp > 0 {
-			expires = time.UnixMilli(int64(timestamp)).UTC().Format(time.RFC3339)
-		}
-		promotion := Object{"code": p["code"], "campaignType": p["campaignType"], "requiresMembership": member, "offerPrice": obj(p["price"])["formattedValue"], "offerComparisonPrice": p["comparePrice"], "condition": first(p["conditionLabel"], p["conditionLabelFormatted"]), "reward": p["rewardLabel"], "qualifyingQuantity": p["qualifyingCount"], "redemptionLimit": p["redeemLimitLabel"], "validUntil": expires, "mixAndMatch": p["realMixAndMatch"], "percentage": p["promotionPercentage"]}
-		if number(p["threshold"]) > 0 {
-			promotion["minimumSpend"] = p["threshold"]
-		}
-		promotions = append(promotions, promotion)
-	}
-	view["offers"] = promotions
-	return view
+	return Object{"products": rows, "page": page, "limit": limit, "totalOffers": total, "hasMore": page < actualPages-1}, nil
 }
 
 func (a *App) Deals(ctx context.Context, c *Client, o Options) (any, error) {
-	if err := o.Arity(0, 1); err != nil {
-		return nil, err
+	if len(o.Positionals) != 0 {
+		return nil, errors.New("deals browses online offers; use willys search \"TERM\" to find products and their offers")
 	}
 	page, err := o.Int("page", 0)
 	if err != nil {
@@ -168,61 +133,26 @@ func (a *App) Deals(ctx context.Context, c *Client, o Options) (any, error) {
 	if page < 0 || limit < 1 || limit > 100 {
 		return nil, errors.New("page must be nonnegative; limit must be 1–100")
 	}
-	terms := []string{""}
-	if len(o.Positionals) > 0 {
-		terms = strings.Split(o.Positionals[0], ",")
-		for i, term := range terms {
-			terms[i] = strings.TrimSpace(term)
-			if terms[i] == "" {
-				return nil, errors.New("each comma-separated deal search term must contain text")
-			}
-		}
-	}
 	client, store, cleanup, err := dealStoreClient(ctx, c, o.Values["store"])
 	defer cleanup()
 	if err != nil {
 		return nil, err
 	}
-	products, err := fetchDeals(ctx, client, text(store["storeId"]))
+	result, err := fetchDealPage(ctx, client, text(store["storeId"]), page, limit)
 	if err != nil {
 		return nil, err
 	}
-	groups := []any{}
-	for _, term := range terms {
-		matches := []any{}
-		words := strings.Fields(strings.ToLower(term))
-		for _, raw := range products {
-			product := obj(raw)
-			haystack := strings.ToLower(strings.Join([]string{text(product["code"]), text(product["name"]), text(product["manufacturer"]), text(product["displayVolume"]), text(product["productLine2"])}, " "))
-			match := true
-			for _, word := range words {
-				if !strings.Contains(haystack, word) {
-					match = false
-					break
-				}
-			}
-			if match {
-				matches = append(matches, raw)
-			}
-		}
-		start := len(matches)
-		if page <= len(matches)/limit {
-			start = min(page*limit, len(matches))
-		}
-		end := min(start+limit, len(matches))
-		rows := []any{}
-		for _, raw := range matches[start:end] {
-			rows = append(rows, dealView(obj(raw), o.Bools["details"]))
-		}
-		query := term
-		if query == "" {
-			query = "All online offers"
-		}
-		groups = append(groups, Object{"query": query, "totalMatches": len(matches), "page": page, "hasMore": end < len(matches), "products": rows})
+	rows := []any{}
+	for _, raw := range list(result["products"]) {
+		rows = append(rows, dealView(obj(raw), o.Bools["details"]))
 	}
-	pricingSession := "current profile"
+	result["products"] = rows
+	result["storeId"] = store["storeId"]
+	result["storeName"] = store["name"]
+	result["pricingSession"] = "current profile"
 	if o.Values["store"] != "" {
-		pricingSession = "temporary guest preview; your profile is unchanged"
+		result["pricingSession"] = "temporary guest preview; your profile is unchanged"
 	}
-	return Object{"storeId": store["storeId"], "storeName": store["name"], "pricingSession": pricingSession, "totalOffers": len(products), "note": "Advertised offers. Conditions and membership apply. Check the cart for applied prices and fulfillment-date eligibility.", "searches": groups}, nil
+	result["note"] = "Advertised offers. Conditions and membership apply. Check the cart for applied prices and fulfillment-date eligibility."
+	return result, nil
 }

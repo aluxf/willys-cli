@@ -1,7 +1,7 @@
 # Membership and online deals
 
-Status: login, account inspection, and general online deal search are implemented locally. Registration and checkout membership display remain planned.
-Release target: v0.2.0-beta.6. Publication requires the configured CI checks.
+Status: login, account inspection, and general online deal browsing are implemented locally. Registration and checkout membership display remain planned.
+The initial implementation shipped in v0.2.0-beta.6. The follow-up refactor separates product search from offer browsing.
 
 ## Verified findings
 
@@ -31,7 +31,7 @@ CLI BankID login now passes live testing. Registration remains untested.
 2. Approve identification with BankID on the user's device.
 3. Verify the resulting customer identity and membership eligibility through Willys.
 4. Run willys deals to browse online offers for the selected store.
-5. Search or filter deals, choose products, and use set directly.
+5. Search products with willys search, review their offers, and use set directly.
 6. Recheck eligibility and applied prices before starting checkout.
 
 Proposed commands:
@@ -41,7 +41,7 @@ Proposed commands:
     willys auth join
     willys auth logout
     willys deals
-    willys deals "pasta, cheese"
+    willys search "pasta, cheese"
     willys deals --store 2351
 
 No identifiers, passwords, or tokens should be required as command-line flags.
@@ -86,9 +86,9 @@ Default to the selected fulfillment store. Allow an explicit store override with
 Return product codes, names, pack sizes, regular prices, offer prices, comparison units, and images with details.
 Include membership requirements, minimum quantities, maximum redemptions, mix-and-match groups, and expiry.
 Keep advertised prices separate from verified cart prices.
-Read every page before applying local text filters. Do not silently filter only the first page.
-Use a short cache keyed by store, account identity, and fulfillment context. Invalidate it after login or logout.
-If the backend's documented filter syntax supports search, use it after a verified test.
+Browse the requested offer page directly. Keep product matching and ranking in normal search.
+Read fresh offers on each request. No offer cache is needed in this implementation.
+Show promotions returned by normal search without filtering out ordinary products.
 Do not describe PERSONAL_GENERAL as personalized or guaranteed eligible.
 
 ### 5. Checkout eligibility
@@ -107,7 +107,7 @@ Add membership status and verified savings to the browser review without adding 
 
 - Synthetic tests: anonymous, member, nonmember, unknown, expired session, login cancellation, timeout, and QR refresh.
 - Synthetic tests: existing account cart conflicts, profile isolation, identity change, and unresolved payment blocks.
-- Synthetic tests: loyalty prices, multibuy quantities, redemption limits, targeted offers, expiry, pagination, and local search.
+- Synthetic tests: loyalty prices, multibuy quantities, redemption limits, targeted offers, expiry, pagination, and normal product search.
 - Synthetic tests: changed totals require confirmation; advertised savings never replace server totals.
 - Live anonymous test: list online deals and verify ordinary prices in a disposable cart.
 - Live member test: the user approves BankID, then compare the same qualifying product before and after login.
@@ -138,7 +138,7 @@ Logout, registration, targeted offers, and checkout membership display remain un
 
 - The general online endpoint returns 246 products for store 2351 and 219 for store 2583.
 - Category and campaign-type query facets work. The tested free-text suffix does not filter results.
-- The CLI filters all result pages locally before applying each term's page and limit.
+- The CLI browses one requested offer page. Normal product search shows available promotion details.
 - Query store IDs select campaigns, but session store context also affects returned prices.
 - Store overrides therefore use a temporary guest session with the requested store activated and verified.
 - The guest session is deleted after the command. The shopper's cart and account are unchanged.
@@ -147,6 +147,7 @@ Logout, registration, targeted offers, and checkout membership display remain un
 - The CLI does not infer personal eligibility or subtract advertised savings from cart totals.
 - The initial implementation reads fresh data rather than caching store and account context.
 
-Local verification passed: complete pagination, text filtering, store isolation, missing-page failures, images, race tests, and vet.
+The initial implementation passed pagination, filtering, store isolation, missing-page, image, race, and vet checks.
+The follow-up refactor requires direct-page browsing and normal-search promotion regression tests.
 A live member cart charged 12,20 kr for one tortilla pack and 20,00 kr for two.
 The test cart was empty after cleanup. No payment was submitted.

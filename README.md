@@ -239,24 +239,27 @@ Unresolved payments block login. Use a separate profile for testing.
 Live BankID login, session reuse, and an applied member discount passed local testing.
 Saved account contact and address fields prefill setup. They do not automatically select fulfillment or a slot.
 
-### Online deals
+### Product search and online deals
 
 ```sh
+willys search "pasta, ost" --limit 5
 willys deals
-willys deals "pasta, ost" --limit 5
-willys deals "garant tortilla" --store 2351
-willys deals "pasta" --page 1 --limit 5
-willys deals "dill" --details
+willys deals --store 2351
+willys deals --page 1 --limit 5
+willys deals --details
 ```
 
+Use normal search to find products. Results include available offers without a separate filter or extra product requests.
+Search preserves Willys' matching and ranking, including products without offers. Separate searches with commas.
+Use `deals` to browse offers. It does not accept search terms.
 Deals use the profile's active store. `--store` selects a temporary guest preview without changing your profile.
-The CLI fetches all online offer pages before filtering names, brands, sizes, and product codes.
-Separate searches with commas. Words within each search must all match, without regard to case.
-`--limit` applies to each search. `--page` starts at zero. Results include match counts and remaining-page indicators.
-Results show regular prices, conditional offer prices, quantity conditions, membership requirements, limits, expiry, and product links.
-`--details` includes the full offer product data, including images and promotion group codes.
-Use `willys product CODE --details` when you need nutrition or ingredients that the offer endpoint omits.
+Each invocation fetches only the requested offer page. `--page` starts at zero; `--limit` defaults to 20.
+The response includes `totalOffers`, `page`, `limit`, `hasMore`, and `products`.
+Product and deal results show conditional offer prices, quantity conditions, membership requirements, limits, expiry, and product links.
+Regular prices stay separate from offer prices. The cart determines applied prices.
+`deals --details` includes full offer product data, including images and promotion group codes.
+Use `willys product CODE --details` for nutrition or ingredients that the offer endpoint omits.
 Use `willys set CODE QUANTITY` directly after choosing a product.
-The cart determines applied prices. A multibuy offer price applies only when its conditions are met.
-These are general online offers, including Willys Plus offers. Targeted personal offers are not included.
-Deal search reads fresh data on each invocation. A failed offer page stops the search without reporting incomplete matches.
+A multibuy offer price applies only when its conditions are met.
+The deals catalog contains general online offers, including Willys Plus offers. Targeted personal offers are not included.
+Each invocation reads fresh data. A failed or incomplete offer page returns an error.

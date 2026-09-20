@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,13 +14,12 @@ import (
 func dealFixture(code, name, brand string) Object {
 	return Object{"code": code, "name": name, "manufacturer": brand, "displayVolume": "500g", "price": "12,20 kr", "image": Object{"url": "https://example.test/image"}, "potentialPromotions": []any{Object{"code": "offer-1", "campaignType": "LOYALTY", "price": Object{"formattedValue": "10,00 kr"}, "qualifyingCount": 2, "conditionLabel": "2 för", "rewardLabel": "20,00", "redeemLimitLabel": "Max 5 köp", "validUntil": float64(1789941599000), "realMixAndMatch": true, "productCodes": []any{code, "other"}}}}
 }
-func dealPage(page, pages, total int, rows []any) Object {
-	return Object{"pagination": Object{"currentPage": page, "numberOfPages": pages, "totalNumberOfResults": total}, "results": rows}
+func dealPage(page, size, pages, total int, rows []any) Object {
+	return Object{"pagination": Object{"currentPage": page, "pageSize": size, "numberOfPages": pages, "totalNumberOfResults": total}, "results": rows}
 }
-func TestDealsSearchesEveryPageBeforeLimiting(t *testing.T) {
-	p := profile(t)
-	pagesRead := []int{}
-	c, _ := clientFor(t, p, func(w http.ResponseWriter, r *http.Request) {
+func TestDealsFetchesOnlyRequestedPage(t *testing.T) {
+	calls := 0
+	c, _ := clientFor(t, profile(t), func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
 			t.Error("mutated active profile")
 		}
@@ -29,38 +27,27 @@ func TestDealsSearchesEveryPageBeforeLimiting(t *testing.T) {
 		case "/store/active":
 			writeJSON(w, Object{"storeId": "2351", "name": "Test store"})
 		case "/search/campaigns/online":
-			if r.URL.Query().Get("q") != "2351" || r.URL.Query().Get("type") != "PERSONAL_GENERAL" {
-				t.Error(r.URL.RawQuery)
+			calls++
+			q := r.URL.Query()
+			if q.Get("q") != "2351" || q.Get("type") != "PERSONAL_GENERAL" || q.Get("page") != "1" || q.Get("size") != "1" {
+				t.Error(q)
 			}
-			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-			pagesRead = append(pagesRead, page)
-			rows := []any{dealFixture("1", "Mjölk", "Garant")}
-			if page == 1 {
-				rows = []any{dealFixture("2", "Pasta Penne", "Garant"), dealFixture("3", "Pasta Spaghetti", "Garant"), dealFixture("4", "Dill", "Other")}
-			}
-			writeJSON(w, dealPage(page, 2, 4, rows))
+			writeJSON(w, dealPage(1, 1, 4, 4, []any{dealFixture("2", "Pasta Penne", "Garant")}))
 		default:
 			t.Error(r.URL.Path)
 			http.NotFound(w, r)
 		}
 	})
-	result, err := setupApp().Deals(context.Background(), c, Options{Positionals: []string{"GARANT pasta, dill, absent"}, Values: map[string]string{"limit": "1"}})
+	result, err := setupApp().Deals(context.Background(), c, Options{Values: map[string]string{"page": "1", "limit": "1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(pagesRead) != "[0 1]" {
-		t.Fatal(pagesRead)
+	out := obj(result)
+	if calls != 1 || out["totalOffers"] != 4 || out["hasMore"] != true || out["page"] != 1 || out["searches"] != nil {
+		t.Fatal(calls, out)
 	}
-	groups := list(obj(result)["searches"])
-	pasta := obj(groups[0])
-	if pasta["totalMatches"] != 2 || pasta["hasMore"] != true || obj(list(pasta["products"])[0])["code"] != "2" {
-		t.Fatal(pasta)
-	}
-	if obj(groups[1])["totalMatches"] != 1 || obj(groups[2])["totalMatches"] != 0 {
-		t.Fatal(groups)
-	}
-	product := obj(list(pasta["products"])[0])
-	if product["image"] != nil || product["regularPrice"] != "12,20 kr" || !strings.Contains(text(product["url"]), "Pasta-Penne-2") {
+	product := obj(list(out["products"])[0])
+	if product["code"] != "2" || product["image"] != nil || product["regularPrice"] != "12,20 kr" || !strings.Contains(text(product["url"]), "Pasta-Penne-2") {
 		t.Fatal(product)
 	}
 	offer := obj(list(product["offers"])[0])
@@ -71,41 +58,37 @@ func TestDealsSearchesEveryPageBeforeLimiting(t *testing.T) {
 		t.Fatal(offer["validUntil"])
 	}
 }
-func TestDealsRejectsPartialOrChangingCatalog(t *testing.T) {
-	for _, kind := range []string{"failed-page", "changed-total", "repeated-page", "duplicate", "missing-metadata", "short-catalog"} {
+func TestDealsRejectsIncompleteOrInvalidPage(t *testing.T) {
+	for _, kind := range []string{"failed-page", "wrong-page", "wrong-size", "duplicate", "missing-metadata", "short-page"} {
 		t.Run(kind, func(t *testing.T) {
 			c, _ := clientFor(t, profile(t), func(w http.ResponseWriter, r *http.Request) {
-				page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-				if kind == "missing-metadata" {
-					writeJSON(w, Object{"results": []any{}})
-					return
-				}
-				if page == 0 {
-					writeJSON(w, dealPage(0, 2, 3, []any{dealFixture("1", "Pasta", "Garant")}))
-					return
-				}
 				if kind == "failed-page" {
 					http.Error(w, "unavailable", 503)
 					return
 				}
-				total := 3
-				if kind == "changed-total" {
-					total = 4
+				if kind == "missing-metadata" {
+					writeJSON(w, Object{"results": []any{}})
+					return
 				}
-				if kind == "repeated-page" {
-					page = 0
-				}
-				rows := []any{dealFixture("2", "Dill", "Garant"), dealFixture("3", "Milk", "Garant")}
+				rows := []any{dealFixture("1", "Pasta", "Garant"), dealFixture("2", "Dill", "Garant")}
 				if kind == "duplicate" {
-					rows[0] = dealFixture("1", "Pasta", "Garant")
+					rows[1] = rows[0]
 				}
-				if kind == "short-catalog" {
+				if kind == "short-page" {
 					rows = rows[:1]
 				}
-				writeJSON(w, dealPage(page, 2, total, rows))
+				page := 0
+				size := 2
+				if kind == "wrong-page" {
+					page = 1
+				}
+				if kind == "wrong-size" {
+					size = 3
+				}
+				writeJSON(w, dealPage(page, size, 2, 4, rows))
 			})
-			if rows, err := fetchDeals(context.Background(), c, "2351"); err == nil || rows != nil {
-				t.Fatal("reported partial catalog as complete", rows, err)
+			if result, err := fetchDealPage(context.Background(), c, "2351", 0, 2); err == nil || result != nil {
+				t.Fatal("accepted invalid page", result, err)
 			}
 		})
 	}
@@ -174,26 +157,36 @@ func TestDealsValidateArgumentsBeforeRequests(t *testing.T) {
 		}
 	}
 }
-func TestDealsEmptyCatalogAndLargePage(t *testing.T) {
+func TestDealsEmptyCatalogAndOutOfRangePage(t *testing.T) {
 	for _, total := range []int{0, 1} {
 		c, _ := clientFor(t, profile(t), func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/store/active" {
 				writeJSON(w, Object{"storeId": "2351"})
 				return
 			}
-			rows := []any{}
-			if total == 1 {
-				rows = append(rows, dealFixture("1", "Pasta", "Garant"))
-			}
-			writeJSON(w, dealPage(0, total, total, rows))
+			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+			writeJSON(w, dealPage(page, 20, total, total, []any{}))
 		})
-		result, err := setupApp().Deals(context.Background(), c, Options{Values: map[string]string{"page": strconv.Itoa(int(^uint(0) >> 1))}})
+		result, err := setupApp().Deals(context.Background(), c, Options{Values: map[string]string{"page": "1000000"}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		group := obj(list(obj(result)["searches"])[0])
-		if len(list(group["products"])) != 0 || group["hasMore"] != false || group["totalMatches"] != total {
-			t.Fatal(group)
+		out := obj(result)
+		if len(list(out["products"])) != 0 || out["hasMore"] != false || out["totalOffers"] != total {
+			t.Fatal(out)
 		}
+	}
+}
+
+func TestDealsIgnoresExtraEmptyAPIPage(t *testing.T) {
+	c, _ := clientFor(t, profile(t), func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, dealPage(1, 2, 3, 4, []any{dealFixture("3", "Pasta", "Garant"), dealFixture("4", "Dill", "Garant")}))
+	})
+	result, err := fetchDealPage(context.Background(), c, "2351", 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["hasMore"] != false || result["totalOffers"] != 4 {
+		t.Fatal(result)
 	}
 }
