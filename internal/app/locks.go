@@ -56,6 +56,8 @@ func commandLock(ctx context.Context, p *Profile, o Options) (func(), error) {
 	switch o.Command {
 	case "checkout", "setup", "slots", "slot":
 		shared = false
+	case "auth":
+		shared = !(len(o.Positionals) == 1 && o.Positionals[0] == "login")
 	case "cart":
 		shared = !(len(o.Positionals) == 1 && o.Positionals[0] == "reset")
 	case "payment":

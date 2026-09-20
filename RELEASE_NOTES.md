@@ -1,17 +1,20 @@
-Browser cart review and checkout validation fixes.
+Sign in with BankID, search online deals, and review your cart in the browser.
 
-- Run `willys cart --open` for a live browser review of the selected profile.
-- View product images, quantities, ingredients, prices, fulfillment details, and totals.
-- The minimal layout places pickup details and the order summary above a product grid.
-- Continue to an existing payment portal. After verified cancellation, explicitly start a new card payment.
-- Keep the CLI running for refresh. Ctrl+C stops the local server; it closes after one hour.
-- Pickup setup now saves and verifies the customer address.
-- Checkout rejects missing address fields, invalid contact details, and unknown fulfillment modes.
-- Payment errors show the server rejection and no longer recommend a missing payment link.
+- Run `willys auth` to inspect account and cart setup status.
+- Run `willys auth login` to sign in with BankID. Sessions persist in the selected profile.
+- Saved contact and address fields prefill setup. Fulfillment and slot selection remain separate.
+- Run `willys deals "pasta, ost"` to search online offers with prices, conditions, expiry, and product links.
+- Deal search checks all offer pages before filtering. `--page` starts at zero; `--limit` applies per term.
+- Use `--store ID` for a temporary guest preview. Your cart and login remain unchanged.
+- Use `--details` for product images and full promotion data. Targeted personal offers remain excluded.
+- Run `willys cart --open` for product images, quantities, ingredients, fulfillment details, and payment totals.
+- The browser review can restart card payment after verified provider cancellation. Unknown payment outcomes remain protected.
+- Pickup setup saves and verifies the customer address. Checkout validates address, contact, and fulfillment details.
+- Help includes the new authentication and deal commands.
 
-Live delivery and pickup setup, slot selection, checkout cancellation, and cart reset passed.
-The card payment handoff returned a payment URL. Payment completion remains unverified.
-Klarna remains behind the experimental flag.
+Live BankID login, session reuse, member pricing, and multibuy pricing passed local tests.
+The test cart charged 12,20 kr for one tortilla pack and 20,00 kr for two. Test products were removed.
+Delivery and pickup setup, slot selection, cart reset, and a card payment handoff passed earlier live tests.
+Payment completion remains unverified. Klarna remains behind the experimental flag.
 
-Canceled card payments now use provider state checks. The page disables canceled links and offers a new payment.
-Repeated requests cannot submit the same replacement payment twice. Unknown outcomes remain protected.
+This prerelease includes the cart review and payment recovery changes from the canceled beta.4 and beta.5 releases.

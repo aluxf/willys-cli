@@ -25,6 +25,8 @@ Usage: willys [--profile NAME] [--json] COMMAND [OPTIONS]
 
 Commands:
   search "TERM, TERM" [--page N] [--limit N]  Search products; limit applies per term
+  deals ["TERM, TERM"] [--store ID] [--page N] [--limit N] [--details]
+                                           Browse or search online offers
   product CODE [--details]                  Show brand, size, price, and product link
   cart [--details] [--open]                 Show the cart or open its browser review
   cart reset                               Empty the cart with one bulk request
@@ -38,6 +40,8 @@ Commands:
   payment [--url]                           Reopen or print the saved payment link
   payment status                           Inspect the saved attempt and current cart
   payment recover                          Recover a verified canceled or unsubmitted attempt
+  auth                                     Show account and cart setup status
+  auth login                               Sign in with BankID in this profile
   session [--import-cookies FILE]           Show storage or import into a new profile
   version                                  Show the installed version
 
@@ -70,7 +74,13 @@ Usage notes:
   cart --open serves a live browser review. Keep the command running; Ctrl+C closes the local server.
   The review reopens a saved payment link. Use checkout --no-open, then refresh the review.
   It uses the selected profile and closes after one hour. A verified canceled card payment can be restarted from the page.
+  deals searches all online offer pages locally; --page is zero-based and --limit applies per term.
+  Deals use the active store. --store previews another store in a temporary guest session.
+  Offer prices require the displayed conditions. Targeted personal offers are not included.
   Swedish catalog terms work best. --details adds images, ingredients, and nutrition to products.
+  auth login opens a BankID QR page. Approve identification on your phone; the CLI verifies the saved session.
+  Saved account contact and address fields prefill setup. Existing local values stay unchanged.
+  Login does not select a store or slot, or silently merge carts. Check auth and cart afterward.
   Use the same profile throughout an order. Default terminals share the same saved cart.
   Different-product updates can run together. Conflicting commands wait automatically.
   Review delivery fees and the reservation buffer before starting an authorized purchase.
@@ -90,7 +100,7 @@ var commandOptions = map[string]map[string]bool{
 	"set": {"unit": false}, "remove": {"unit": false}, "stores": {"pickup": true, "all": true, "details": true},
 	"setup": {"first-name": false, "last-name": false, "phone": false, "email": false, "street": false, "postcode": false, "town": false, "store": false, "mode": false},
 	"slots": {"choose": true}, "slot": {}, "checkout": {"method": false, "no-open": true, "yes": true, "expected-total": false, "expected-reservation": false, "experimental-klarna": true},
-	"payment": {"url": true}, "session": {"import-cookies": false}, "version": {},
+	"deals": {"store": false, "page": false, "limit": false, "details": true}, "auth": {}, "payment": {"url": true}, "session": {"import-cookies": false}, "version": {},
 }
 
 type Options struct {
@@ -201,6 +211,7 @@ type App struct {
 	Interactive bool
 	Open        func(string) error
 	Now         func() time.Time
+	BankID      func(context.Context, *Client) error
 	Authorize   func(context.Context, Object) (string, error)
 }
 
@@ -291,6 +302,9 @@ func Emit(w io.Writer, value any, raw bool) error {
 			if message, ok := v["error"]; ok {
 				fmt.Fprintf(w, "Error: %s\n\n", message)
 				return nil
+			}
+			if total, ok := v["totalMatches"]; ok {
+				fmt.Fprintf(w, "Matches: %v; page: %v; more: %v\n", total, v["page"], v["hasMore"])
 			}
 			return Emit(w, v["products"], false)
 		}
@@ -385,6 +399,9 @@ func paymentPending(p *Profile) error {
 	return nil
 }
 func (a *App) Run(ctx context.Context, p *Profile, o Options) (any, error) {
+	if o.Command == "auth" && (len(o.Positionals) > 1 || (len(o.Positionals) == 1 && o.Positionals[0] != "login")) {
+		return nil, errors.New("use willys auth to inspect your session, or willys auth login to sign in")
+	}
 	if o.Command == "session" {
 		if err := o.Arity(0, 0); err != nil {
 			return nil, err
@@ -438,6 +455,13 @@ func (a *App) Run(ctx context.Context, p *Profile, o Options) (any, error) {
 		return nil, err
 	}
 	switch o.Command {
+	case "auth":
+		if len(o.Positionals) == 1 {
+			return a.Login(ctx, c, p)
+		}
+		return a.AuthStatus(ctx, c)
+	case "deals":
+		return a.Deals(ctx, c, o)
 	case "search":
 		if err = o.Arity(1, 1); err != nil {
 			return nil, err

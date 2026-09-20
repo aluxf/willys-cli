@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/aluxf/willys-cli/main/install.sh | 
 The installer downloads a standalone binary and verifies its SHA-256 checksum.
 You do not need Python, Go, or a package manager.
 It installs into `~/.local/bin`. Follow the printed PATH instruction if needed.
-The installer defaults to the reviewed beta, `v0.2.0-beta.5`.
+The installer defaults to the reviewed beta, `v0.2.0-beta.6`.
 Set `WILLYS_INSTALL_DIR` to choose another directory, or `WILLYS_VERSION` to select a release.
 Run the installer again to update.
 
@@ -141,7 +141,7 @@ The CLI does not automate credit decisions, payment approval, or BankID.
 
 ### Current limits
 
-Payment completion, order cancellation, and account login are not implemented.
+Payment completion and order cancellation remain unverified. BankID account login is under local testing.
 Pickup setup and Klarna authorization remain unverified live.
 The CLI retains failed or uncertain payment attempts to prevent duplicate orders.
 Unsubmitted attempts have a recovery command. Other attempts require provider or Willys verification.
@@ -226,3 +226,37 @@ If no link exists, run `willys checkout --no-open` in another terminal, then ref
 Keep the review command running. Ctrl+C stops its local server, which also closes after one hour.
 
 Payment recovery also archives card attempts that Swedbank Pay explicitly confirms as canceled. Unknown outcomes remain protected.
+
+### BankID login
+
+Run `willys auth login` and scan the QR code with BankID. Approve the Willys identification request.
+The CLI verifies the account and stores session cookies in the selected profile.
+Run `willys auth` to inspect account status, saved address availability, and cart setup.
+Login does not place an order, select a slot, or silently merge carts.
+The CLI saves a cart snapshot before login and reports changes after authentication.
+An account address does not prove that the cart has an address. Run setup when required.
+Unresolved payments block login. Use a separate profile for testing.
+Live BankID login, session reuse, and an applied member discount passed local testing.
+Saved account contact and address fields prefill setup. They do not automatically select fulfillment or a slot.
+
+### Online deals
+
+```sh
+willys deals
+willys deals "pasta, ost" --limit 5
+willys deals "garant tortilla" --store 2351
+willys deals "pasta" --page 1 --limit 5
+willys deals "dill" --details
+```
+
+Deals use the profile's active store. `--store` selects a temporary guest preview without changing your profile.
+The CLI fetches all online offer pages before filtering names, brands, sizes, and product codes.
+Separate searches with commas. Words within each search must all match, without regard to case.
+`--limit` applies to each search. `--page` starts at zero. Results include match counts and remaining-page indicators.
+Results show regular prices, conditional offer prices, quantity conditions, membership requirements, limits, expiry, and product links.
+`--details` includes the full offer product data, including images and promotion group codes.
+Use `willys product CODE --details` when you need nutrition or ingredients that the offer endpoint omits.
+Use `willys set CODE QUANTITY` directly after choosing a product.
+The cart determines applied prices. A multibuy offer price applies only when its conditions are met.
+These are general online offers, including Willys Plus offers. Targeted personal offers are not included.
+Deal search reads fresh data on each invocation. A failed offer page stops the search without reporting incomplete matches.
