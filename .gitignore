@@ -1,0 +1,12 @@
+/dist/
+/willys
+/willys.exe
+*.cookies.txt
+cookies.txt
+cookies.json
+# Local development environments are never release sources.
+.venv/
+*.egg-info/
+__pycache__/
+
+/build/

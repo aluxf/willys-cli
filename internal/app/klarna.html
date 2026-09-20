@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Willys CLI — Klarna</title>
+<style>body{font:16px system-ui;max-width:640px;margin:48px auto;padding:0 24px}button{font:inherit;padding:12px 20px;cursor:pointer}p{line-height:1.5}</style>
+<h1>Pay with Klarna</h1>
+<p>This is an experimental local payment handoff. Review Klarna’s terms before continuing.</p>
+<div id="klarna"></div>
+<button id="pay" disabled>Continue with Klarna</button>
+<p id="status">Loading Klarna…</p>
+<script>
+const config = CONFIG_PLACEHOLDER;
+const statusText = document.getElementById('status');
+window.klarnaAsyncCallback = function () {
+  try {
+    Klarna.Payments.init({client_token: config.clientToken});
+    const options = config.category ? {payment_method_category: config.category} : {};
+    Klarna.Payments.load({...options, container: '#klarna'}, {}, function (res) {
+      if (!res.show_form) {statusText.textContent = 'Klarna is unavailable for this session.'; return;}
+      document.getElementById('pay').disabled = false;
+      statusText.textContent = 'Review the Klarna options before continuing.';
+    });
+    document.getElementById('pay').onclick = function () {
+      this.disabled = true;
+      Klarna.Payments.authorize(options, {}, async function (res) {
+        if (!res.approved || !res.authorization_token || res.finalize_required) {
+          statusText.textContent = 'Authorization did not finish. Return to the terminal.'; return;
+        }
+        try {
+          const response = await fetch(location.pathname, {method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({authorization_token: res.authorization_token})});
+          statusText.textContent = response.ok ? 'Return to the terminal to continue.' : 'Handoff failed.';
+        } catch (error) {statusText.textContent = 'Handoff failed. Return to the terminal.';}
+      });
+    };
+  } catch (error) {statusText.textContent = 'Klarna could not start. Return to the terminal.';}
+};
+</script>
+<script async src="https://x.klarnacdn.net/kp/lib/v1/api.js"></script>
+</html>

@@ -1,0 +1,27 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+      - name: Build executables
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: scripts/release.sh "${RELEASE_TAG#v}"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" dist/willys_*.tar.gz dist/willys_*.zip dist/checksums.txt --verify-tag --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md
