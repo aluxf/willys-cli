@@ -24,7 +24,7 @@ const usage = `willys — shop at Willys through HTTP
 Usage: willys [--profile NAME] [--json] COMMAND [OPTIONS]
 
 Commands:
-  search QUERY [--page N] [--limit N]    Search products
+  search QUERY [--page N] [--limit N]    Search products; separate terms with commas
   product CODE [--details]              Show a product
   cart [--details]                      Show the cart and payment reservation
   set CODE QUANTITY [--unit UNIT]       Set the final quantity
@@ -213,6 +213,14 @@ func Emit(w io.Writer, value any, raw bool) error {
 	}
 	switch v := value.(type) {
 	case Object:
+		if query, ok := v["query"]; ok {
+			fmt.Fprintf(w, "Search: %s\n", query)
+			if message, ok := v["error"]; ok {
+				fmt.Fprintf(w, "Error: %s\n\n", message)
+				return nil
+			}
+			return Emit(w, v["products"], false)
+		}
 		keys := []string{}
 		for k := range v {
 			keys = append(keys, k)
@@ -370,15 +378,7 @@ func (a *App) Run(ctx context.Context, p *Profile, o Options) (any, error) {
 		if page < 0 || limit < 1 || limit > 100 {
 			return nil, errors.New("page must be nonnegative; limit must be 1–100")
 		}
-		v, e := c.Get(ctx, "/search/clean", url.Values{"q": {o.Positionals[0]}, "page": {strconv.Itoa(page)}, "size": {strconv.Itoa(limit)}})
-		if e != nil {
-			return nil, e
-		}
-		out := []any{}
-		for _, raw := range list(obj(v)["results"]) {
-			out = append(out, ProductView(obj(raw), nil, false))
-		}
-		return out, nil
+		return a.Search(ctx, c, p, o.Positionals[0], page, limit)
 	case "product":
 		if err = o.Arity(1, 1); err != nil {
 			return nil, err

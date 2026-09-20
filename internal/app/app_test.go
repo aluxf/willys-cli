@@ -685,3 +685,42 @@ func TestConcurrentCookieMergeAndStaleDeletion(t *testing.T) {
 		t.Fatal("stale response restored deleted cookie")
 	}
 }
+
+func TestCommaSearchParallelAndPartialFailure(t *testing.T) {
+	p := profile(t)
+	var active, peak atomic.Int32
+	c, _ := clientFor(t, p, func(w http.ResponseWriter, r *http.Request) {
+		n := active.Add(1)
+		defer active.Add(-1)
+		for old := peak.Load(); n > old; old = peak.Load() {
+			if peak.CompareAndSwap(old, n) {
+				break
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+		if r.URL.Query().Get("size") != "3" {
+			t.Error("limit was not applied to each term")
+		}
+		term := r.URL.Query().Get("q")
+		if term == "bad" {
+			w.WriteHeader(503)
+			return
+		}
+		writeJSON(w, Object{"results": []any{Object{"name": term}}})
+	})
+	a := NewApp(strings.NewReader(""), io.Discard, io.Discard, false)
+	result, e := a.Search(context.Background(), c, p, " pasta, oats, bad, milk, rice ", 0, 3)
+	if e != nil {
+		t.Fatal(e)
+	}
+	groups := list(result)
+	if len(groups) != 5 || obj(groups[0])["query"] != "pasta" || obj(groups[2])["error"] == nil || len(list(obj(groups[4])["products"])) != 1 {
+		t.Fatal(result)
+	}
+	if peak.Load() < 2 || peak.Load() > 4 {
+		t.Fatal("unexpected concurrency", peak.Load())
+	}
+	if _, e = a.Search(context.Background(), c, p, "pasta,,oats", 0, 3); e == nil {
+		t.Fatal("accepted empty term")
+	}
+}

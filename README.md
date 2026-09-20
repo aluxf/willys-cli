@@ -29,6 +29,7 @@ Releases support macOS, Linux, and Windows on AMD64 and ARM64.
 
 ```sh
 willys search "penne"
+willys search "penne, Pepsi Max, Heinz ketchup, ramen" --limit 3
 willys product 101240218_ST
 willys set 101240218_ST 10
 willys cart
@@ -39,6 +40,10 @@ willys remove 101240218_ST
 `set` sets the final quantity. It does not add that quantity to the previous amount.
 Use `--unit kilogram` for supported weight-based products. Weight-based updates remain unverified live.
 Search returns Willys' ranking. Use `--page` and `--limit` to browse more results.
+Separate search terms with commas to search up to four terms concurrently.
+The CLI queues additional terms and groups results in the input order.
+`--page` and `--limit` apply to each term. Failed terms show an error beside successful groups.
+A single search retains its existing output format.
 The CLI does not automatically match a shopping description to a product.
 
 Cart output includes brand, pack size, prices, discounts, product links, and the payment reservation.
